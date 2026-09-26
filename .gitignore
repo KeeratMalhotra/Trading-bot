@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+backend/.venv/
+backend/data/
+backend/.bt-cache/
+backend/*.log
+backend/.dev-*
+backend/.bt-summary.py
+frontend/node_modules/
+frontend/dist/
+.env
+*.tsbuildinfo
