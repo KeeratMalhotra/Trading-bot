@@ -1,0 +1,134 @@
+"""Static configuration: markets, risk profiles, fee schedule, runtime env settings."""
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+# --------------------------------------------------------------------------- env
+DATA_DIR = Path(os.getenv("DATA_DIR", Path(__file__).resolve().parents[1] / "data"))
+DB_PATH = DATA_DIR / "botbattle.sqlite3"
+STATIC_DIR = Path(os.getenv("STATIC_DIR", Path(__file__).resolve().parents[2] / "frontend" / "dist"))
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")  # empty = controls open (fine on localhost)
+MARKET_SOURCE = os.getenv("MARKET_SOURCE", "auto")  # auto | coinbase | sim
+STARTING_BALANCE = float(os.getenv("STARTING_BALANCE", "10000"))
+# Trading mode. Only "paper" is wired up. "live" additionally requires
+# LIVE_TRADING_ACK=I_UNDERSTAND_REAL_MONEY_IS_AT_RISK and Coinbase CDP keys.
+TRADING_MODE = os.getenv("TRADING_MODE", "paper")
+
+# ----------------------------------------------------------------------- markets
+SYMBOLS: list[str] = [
+    "BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "DOGE-USD",
+    "ADA-USD", "AVAX-USD", "LINK-USD", "LTC-USD", "SUI-USD",
+]
+TIMEFRAMES: list[int] = [60, 300, 900, 3600, 21600]
+TF_LABEL = {60: "1m", 300: "5m", 900: "15m", 3600: "1h", 21600: "6h"}
+
+# Rough fallback top-of-book depth in USD when the feed does not provide sizes
+# (backtests / simulator). Live mode uses real best bid/ask sizes from Coinbase.
+DEFAULT_TOP_DEPTH_USD = {"BTC-USD": 60_000, "ETH-USD": 40_000}
+DEFAULT_TOP_DEPTH_USD_OTHER = 8_000
+DEFAULT_SPREAD = {"BTC-USD": 0.00002, "ETH-USD": 0.00005}
+DEFAULT_SPREAD_OTHER = 0.0004
+
+
+# ------------------------------------------------------------------ fee schedule
+@dataclass(frozen=True)
+class FeeTier:
+    name: str
+    min_volume: float  # trailing 30-day USD volume
+    maker: float
+    taker: float
+
+
+# Coinbase Advanced Trade spot fee schedule (volume-tiered, maker/taker).
+# Coinbase revises this schedule from time to time - verify the current numbers at
+# https://www.coinbase.com/advanced-fees and edit here if they changed.
+COINBASE_FEE_TIERS: list[FeeTier] = [
+    FeeTier("Intro 1", 0, 0.0060, 0.0120),
+    FeeTier("Intro 2", 10_000, 0.0035, 0.0075),
+    FeeTier("Advanced 1", 50_000, 0.0025, 0.0040),
+    FeeTier("Advanced 2", 100_000, 0.0015, 0.0025),
+    FeeTier("Advanced 3", 1_000_000, 0.0010, 0.0020),
+    FeeTier("VIP 1", 15_000_000, 0.0008, 0.0018),
+    FeeTier("VIP 2", 75_000_000, 0.0005, 0.0016),
+    FeeTier("VIP 3", 250_000_000, 0.0003, 0.0012),
+    FeeTier("VIP 4", 400_000_000, 0.0000, 0.0005),
+]
+# "auto" = tier derived from the arena's combined simulated 30-day volume
+# (all bots = portfolios inside one Coinbase account, like real Coinbase portfolios).
+DEFAULT_FEE_MODE = os.getenv("FEE_MODE", "Advanced 2")
+
+
+# ---------------------------------------------------------------- risk profiles
+@dataclass(frozen=True)
+class RiskProfile:
+    id: str
+    name: str
+    label: str
+    color: str
+    tagline: str
+    risk_per_trade: float       # fraction of equity risked (stop distance incl. costs)
+    max_open: int               # concurrent positions
+    max_position_pct: float     # max notional per position, fraction of equity
+    max_exposure_pct: float     # max total notional in positions
+    daily_loss_limit: float     # circuit breaker, fraction of day-start equity
+    symbols: tuple[str, ...]
+    signal_tf: int
+    trend_tf: int
+    strategies: tuple[str, ...]
+    min_confidence: float
+    min_net_rr: float           # reward/risk AFTER fees + slippage
+    target_rr: float            # default take-profit in R
+    entry_order: str            # "limit" (maker) | "market" (taker)
+    limit_timeout_s: int
+    breakeven_r: float
+    trail_start_r: float
+    trail_atr: float
+    partial_r: float | None
+    partial_pct: float
+    max_hold_bars: int          # time stop, in signal-tf bars
+    cooldown_bars: int          # after closing a trade on a symbol
+    scan_offset_s: int          # staggers the thought feed between bots
+
+
+PROFILES: list[RiskProfile] = [
+    RiskProfile(
+        id="low", name="SENTINEL", label="Low Risk", color="#34d399",
+        tagline="Capital preservation. Trades only A+ setups on BTC & ETH.",
+        risk_per_trade=0.005, max_open=2, max_position_pct=0.40, max_exposure_pct=0.70,
+        daily_loss_limit=0.02, symbols=("BTC-USD", "ETH-USD"),
+        signal_tf=3600, trend_tf=21600,
+        strategies=("trend_pullback", "breakout", "mean_reversion"),
+        min_confidence=68, min_net_rr=1.5, target_rr=3.0,
+        entry_order="limit", limit_timeout_s=300,
+        breakeven_r=1.0, trail_start_r=1.5, trail_atr=2.5, partial_r=1.5, partial_pct=0.5,
+        max_hold_bars=48, cooldown_bars=2, scan_offset_s=5,
+    ),
+    RiskProfile(
+        id="medium", name="TACTICIAN", label="Medium Risk", color="#fbbf24",
+        tagline="Balanced. Rotates between trend, breakout and reversion on majors.",
+        risk_per_trade=0.01, max_open=4, max_position_pct=0.40, max_exposure_pct=0.90,
+        daily_loss_limit=0.04,
+        symbols=("BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "LINK-USD", "LTC-USD"),
+        signal_tf=900, trend_tf=3600,
+        strategies=("trend_pullback", "breakout", "mean_reversion"),
+        min_confidence=62, min_net_rr=1.3, target_rr=2.5,
+        entry_order="limit", limit_timeout_s=150,
+        breakeven_r=1.0, trail_start_r=1.5, trail_atr=2.0, partial_r=1.5, partial_pct=0.33,
+        max_hold_bars=64, cooldown_bars=2, scan_offset_s=25,
+    ),
+    RiskProfile(
+        id="high", name="BERSERKER", label="High Risk", color="#f43f5e",
+        tagline="Aggressive. Big size, market orders, all 10 coins including volatile alts.",
+        risk_per_trade=0.02, max_open=6, max_position_pct=0.50, max_exposure_pct=1.00,
+        daily_loss_limit=0.08, symbols=tuple(SYMBOLS),
+        signal_tf=900, trend_tf=3600,
+        strategies=("breakout", "momentum", "trend_pullback", "mean_reversion"),
+        min_confidence=60, min_net_rr=1.3, target_rr=2.0,
+        entry_order="market", limit_timeout_s=0,
+        breakeven_r=0.8, trail_start_r=1.2, trail_atr=1.5, partial_r=None, partial_pct=0.0,
+        max_hold_bars=48, cooldown_bars=1, scan_offset_s=45,
+    ),
+]
+PROFILE_BY_ID = {p.id: p for p in PROFILES}
