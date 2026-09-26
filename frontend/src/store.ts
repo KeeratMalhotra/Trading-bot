@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { BotEvent, Candle, Live, Meta, Trade } from "./types";
 import { sounds } from "./lib/sound";
+import { updateRegistry } from "./lib/bots";
 
 export interface Toast {
   id: string;
@@ -122,6 +123,7 @@ export function connect() {
     const msg = JSON.parse(m.data);
     switch (msg.t) {
       case "snapshot":
+        updateRegistry(msg.live.bots);
         useStore.setState({
           meta: msg.meta,
           live: msg.live,
@@ -131,6 +133,7 @@ export function connect() {
         });
         break;
       case "live":
+        updateRegistry(msg.bots);
         useStore.setState({ live: msg });
         break;
       case "events":
@@ -152,5 +155,4 @@ export function connect() {
   };
 }
 
-export const botColor = (id: string) =>
-  ({ low: "#34d399", medium: "#fbbf24", high: "#f43f5e", system: "#94a3b8" })[id] ?? "#94a3b8";
+export { botColor, botName } from "./lib/bots";

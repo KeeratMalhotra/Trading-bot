@@ -123,3 +123,33 @@ async def run_ticker(hub: MarketHub, stop: asyncio.Event) -> None:
         hub.status.message = "Reconnecting to Coinbase..."
         await asyncio.sleep(backoff)
         backoff = min(backoff * 2, 30)
+
+
+
+async def resync_loop(hub: MarketHub, stop: asyncio.Event) -> None:
+    """After every candle close, replace the ticker-built candle with Coinbase's official one.
+
+    The ticker stream undercounts volume (it batches trades), while all history comes from
+    REST candles. Re-syncing keeps volume-based signals consistent between history and live.
+    """
+    last_bucket: dict[int, int] = {}
+    async with httpx.AsyncClient(headers=HEADERS, timeout=15) as client:
+        while not stop.is_set():
+            now = time.time()
+            await asyncio.sleep((now // 60 + 1) * 60 + 8 - now)
+            now = time.time()
+            for tf in sorted({tf for s in hub.series.values() for tf in s}):
+                b = int(now // tf)
+                if last_bucket.get(tf) == b:
+                    continue
+                first = tf not in last_bucket
+                last_bucket[tf] = b
+                if first:
+                    continue
+                for sym in hub.symbols:
+                    try:
+                        cs = await fetch_candles(client, sym, tf, (b - 3) * tf, b * tf)
+                        hub.series[sym][tf].patch([c for c in cs if c.t < b * tf])
+                    except Exception as e:  # noqa: BLE001
+                        log.debug("resync %s %s failed: %s", sym, tf, e)
+                    await asyncio.sleep(0.12)

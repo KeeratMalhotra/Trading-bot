@@ -21,8 +21,8 @@ SYMBOLS: list[str] = [
     "BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "DOGE-USD",
     "ADA-USD", "AVAX-USD", "LINK-USD", "LTC-USD", "SUI-USD",
 ]
-TIMEFRAMES: list[int] = [60, 300, 900, 3600, 21600]
-TF_LABEL = {60: "1m", 300: "5m", 900: "15m", 3600: "1h", 21600: "6h"}
+TIMEFRAMES: list[int] = [60, 300, 900, 3600, 21600, 86400]
+TF_LABEL = {60: "1m", 300: "5m", 900: "15m", 3600: "1h", 21600: "6h", 86400: "1d"}
 
 # Rough fallback top-of-book depth in USD when the feed does not provide sizes
 # (backtests / simulator). Live mode uses real best bid/ask sizes from Coinbase.
@@ -90,9 +90,39 @@ class RiskProfile:
     max_hold_bars: int          # time stop, in signal-tf bars
     cooldown_bars: int          # after closing a trade on a symbol
     scan_offset_s: int          # staggers the thought feed between bots
+    kind: str = "rules"         # rules | oracle | hodl
+    generation: str = "Gen 1"
+    benchmark: bool = False
 
 
 PROFILES: list[RiskProfile] = [
+    RiskProfile(
+        id="oracle", name="ORACLE", label="Machine Learning", color="#a78bfa",
+        tagline="Gradient-boosted model trained on 6 years of hourly data. Predicts each trade's outcome.",
+        risk_per_trade=0.01, max_open=5, max_position_pct=0.25, max_exposure_pct=1.00,
+        # slow systems: the breaker only guards against a catastrophic day
+        daily_loss_limit=0.15, symbols=tuple(SYMBOLS),
+        signal_tf=3600, trend_tf=3600, strategies=("oracle",),
+        min_confidence=0, min_net_rr=1.5, target_rr=2.0,
+        # market entries: in the 4-year engine replay, passive limit orders were adversely
+        # selected (filled on the losers, missed the winners): +4% vs +34.5%
+        entry_order="market", limit_timeout_s=0,
+        breakeven_r=99, trail_start_r=99, trail_atr=3.0, partial_r=None, partial_pct=0.0,
+        max_hold_bars=336, cooldown_bars=1, scan_offset_s=15,
+        kind="oracle", generation="Gen 2",
+    ),
+    RiskProfile(
+        id="nomad", name="NOMAD", label="Trend Follower", color="#38bdf8",
+        tagline="Daily-chart trend follower. Few trades, rides big moves for weeks, hides in cash in bear markets.",
+        risk_per_trade=0.01, max_open=8, max_position_pct=0.25, max_exposure_pct=1.00,
+        daily_loss_limit=0.15, symbols=tuple(SYMBOLS),
+        signal_tf=86400, trend_tf=86400, strategies=("trend_follow",),
+        min_confidence=0, min_net_rr=0.0, target_rr=50.0,
+        entry_order="limit", limit_timeout_s=3 * 3600,
+        breakeven_r=99, trail_start_r=99, trail_atr=3.0, partial_r=None, partial_pct=0.0,
+        max_hold_bars=100_000, cooldown_bars=1, scan_offset_s=35,
+        generation="Gen 2",
+    ),
     RiskProfile(
         id="low", name="SENTINEL", label="Low Risk", color="#34d399",
         tagline="Capital preservation. Trades only A+ setups on BTC & ETH.",
@@ -129,6 +159,16 @@ PROFILES: list[RiskProfile] = [
         entry_order="market", limit_timeout_s=0,
         breakeven_r=0.8, trail_start_r=1.2, trail_atr=1.5, partial_r=None, partial_pct=0.0,
         max_hold_bars=48, cooldown_bars=1, scan_offset_s=45,
+    ),
+    RiskProfile(
+        id="hodl", name="HODL", label="Benchmark", color="#94a3b8",
+        tagline="Buys Bitcoin once and never sells. The bar every bot has to beat.",
+        risk_per_trade=0, max_open=1, max_position_pct=1.0, max_exposure_pct=1.0,
+        daily_loss_limit=1.0, symbols=("BTC-USD",), signal_tf=3600, trend_tf=3600, strategies=(),
+        min_confidence=0, min_net_rr=0, target_rr=0, entry_order="market", limit_timeout_s=0,
+        breakeven_r=99, trail_start_r=99, trail_atr=0, partial_r=None, partial_pct=0.0,
+        max_hold_bars=10**9, cooldown_bars=0, scan_offset_s=55,
+        kind="hodl", benchmark=True,
     ),
 ]
 PROFILE_BY_ID = {p.id: p for p in PROFILES}

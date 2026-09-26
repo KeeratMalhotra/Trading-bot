@@ -85,6 +85,22 @@ class CandleSeries:
             gaps += 1
         self.version += 1
 
+    def patch(self, candles: list[Candle]) -> int:
+        """Replace closed candles with exchange-official ones (exact OHLCV)."""
+        if not self.closed:
+            return 0
+        by_t = {c.t: c for c in candles}
+        n = 0
+        for k in range(len(self.closed) - 1, max(-1, len(self.closed) - 8), -1):
+            cur = self.closed[k]
+            new = by_t.get(cur.t)
+            if new is not None:
+                self.closed[k] = new
+                n += 1
+        if n:
+            self.version += 1
+        return n
+
     # ------------------------------------------------------------------ access
     def arrays(self) -> dict[str, np.ndarray]:
         """Numpy arrays of CLOSED candles (cached per version)."""

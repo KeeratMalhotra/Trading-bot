@@ -1,17 +1,16 @@
 import { useState } from "react";
 import clsx from "clsx";
 import { Download } from "lucide-react";
-import { useStore, botColor } from "../store";
+import { useStore, botColor, botName } from "../store";
 import { coin, pct, timeShortET, tone, usd } from "../lib/format";
-
-const NAMES: Record<string, string> = { low: "SENTINEL", medium: "TACTICIAN", high: "BERSERKER" };
+import { OracleRadar } from "./OracleRadar";
 
 export function SidePanel() {
-  const [tab, setTab] = useState<"trades" | "tax">("trades");
+  const [tab, setTab] = useState<"oracle" | "trades" | "tax">("oracle");
   return (
     <div className="panel flex flex-col min-h-0 h-full">
       <div className="flex items-center gap-1 px-3 pt-2.5 pb-1.5">
-        {(["trades", "tax"] as const).map((t) => (
+        {(["oracle", "trades", "tax"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -20,11 +19,13 @@ export function SidePanel() {
               tab === t ? "!text-white bg-white/10" : "hover:!text-ink-200",
             )}
           >
-            {t === "trades" ? "Closed trades" : "Taxes & fees"}
+            {t === "oracle" ? "Oracle forecasts" : t === "trades" ? "Closed trades" : "Taxes & fees"}
           </button>
         ))}
       </div>
-      <div className="flex-1 min-h-0 overflow-y-auto scroll-thin px-2 pb-2">{tab === "trades" ? <ClosedTrades /> : <TaxPanel />}</div>
+      <div className="flex-1 min-h-0 overflow-y-auto scroll-thin px-2 pb-2">
+        {tab === "oracle" ? <OracleRadar /> : tab === "trades" ? <ClosedTrades /> : <TaxPanel />}
+      </div>
     </div>
   );
 }
@@ -46,7 +47,7 @@ function ClosedTrades() {
             <div className="flex items-center gap-2">
               <span className="w-1.5 h-1.5 rounded-full" style={{ background: botColor(t.bot) }} />
               <span className="text-[10px] font-bold tracking-wider" style={{ color: botColor(t.bot) }}>
-                {NAMES[t.bot]}
+                {botName(t.bot)}
               </span>
               <span className="text-sm font-semibold text-white">{coin(t.symbol)}</span>
               <span className="num text-[10px] text-ink-400">{timeShortET(t.closed)}</span>
@@ -82,7 +83,7 @@ function TaxPanel() {
         </div>
       )}
       <div className="space-y-2">
-        {bots.map((b) => (
+        {bots.filter((b) => !b.benchmark).map((b) => (
           <div key={b.id} className="rounded-xl bg-white/[0.03] p-3">
             <div className="flex items-center justify-between">
               <span className="text-[11px] font-bold tracking-wider" style={{ color: b.color }}>

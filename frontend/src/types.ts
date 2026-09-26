@@ -1,4 +1,4 @@
-export type BotId = "low" | "medium" | "high";
+export type BotId = string;
 
 export interface Price {
   s: string;
@@ -27,6 +27,9 @@ export interface Bot {
   name: string;
   label: string;
   color: string;
+  kind: "rules" | "oracle" | "hodl";
+  generation: string;
+  benchmark: boolean;
   tagline: string;
   equity: number;
   cash: number;
@@ -94,7 +97,9 @@ export interface Position {
   price: number;
   stop: number;
   initial_stop: number;
-  target: number;
+  target: number | null;
+  hard_stop: number | null;
+  expires: number | null;
   partial: number | null;
   partial_done: boolean;
   opened: number;
@@ -139,7 +144,7 @@ export interface Trade {
 export interface BotEvent {
   id: string;
   ts: number;
-  bot: BotId | "system";
+  bot: BotId;
   kind: "thought" | "setup" | "pass" | "order" | "fill" | "open" | "stop" | "partial" | "close" | "risk" | "system";
   title: string;
   text: string;
@@ -171,6 +176,49 @@ export interface Live {
   market: MarketStatus;
   fees: Fees;
   regimes: Record<string, Record<string, string>>;
+  oracle: OracleState | null;
+}
+
+export interface OraclePrediction {
+  symbol: string;
+  pred: number;
+  thr: number;
+  regime: boolean;
+  dvol: number;
+  rank: number;
+  reasons: string[];
+}
+
+export interface OracleTrack {
+  generated: string;
+  method: string;
+  model: { type: string; features: number; coins: number; history: string; auc_unfiltered: number };
+  dev: TrackPeriod;
+  holdout: TrackPeriod;
+  caveat: string;
+}
+
+export interface TrackPeriod {
+  period: string;
+  return_pct: number;
+  max_dd_pct: number;
+  trades: number;
+  win_rate: number;
+  avg_r: number;
+  hodl_return_pct: number;
+  hodl_max_dd_pct: number;
+}
+
+export interface OracleState {
+  state: string;
+  status: string;
+  ready: boolean;
+  model: { trained_at: number; samples: number; features: number; cutoff: number; train_seconds?: number; hours?: number } | null;
+  bar_t: number | null;
+  threshold: number | null;
+  regime: boolean | null;
+  predictions: OraclePrediction[];
+  track_record: OracleTrack | null;
 }
 
 export interface TaxSettings {

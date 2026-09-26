@@ -8,7 +8,7 @@ from collections import deque
 from .accounting.tax import STATE_RATES, TaxSettings
 from .config import (DEFAULT_FEE_MODE, PROFILES, STARTING_BALANCE, SYMBOLS, TF_LABEL,
                      TRADING_MODE)
-from .engine.bot import Bot, money
+from .engine.bot import Bot, HodlBot, money
 from .engine.indicators import IndicatorCache
 from .execution.base import ExecutionVenue
 from .execution.fees import FeeTracker
@@ -23,7 +23,8 @@ PERSIST_S = 10
 
 class Arena:
     def __init__(self, hub: MarketHub, store: Store | None, balance: float = STARTING_BALANCE,
-                 venue: ExecutionVenue | None = None, latency: tuple[float, float] = (0.08, 0.35)):
+                 venue: ExecutionVenue | None = None, latency: tuple[float, float] = (0.08, 0.35),
+                 oracle=None, bot_ids: list[str] | None = None):
         self.hub = hub
         self.store = store
         self.balance = balance
@@ -32,7 +33,16 @@ class Arena:
         self.venue = venue or PaperExchange(hub, self.fees, latency=latency)
         self.mode = self.venue.mode if venue else "paper"
         self.cache = IndicatorCache(hub)
-        self.bots = [Bot(p, hub, self.venue, self.cache, lambda: self.tax, balance) for p in PROFILES]
+        self.oracle = oracle
+        self.bots = []
+        for p in PROFILES:
+            if bot_ids and p.id not in bot_ids:
+                continue
+            cls = HodlBot if p.kind == "hodl" else Bot
+            b = cls(p, hub, self.venue, self.cache, lambda: self.tax, balance)
+            if p.kind == "oracle":
+                b.oracle = oracle
+            self.bots.append(b)
         self.by_id = {b.id: b for b in self.bots}
         self.events: deque[dict] = deque(maxlen=400)
         self.equity: dict[str, deque[tuple[float, float]]] = {b.id: deque(maxlen=20000) for b in self.bots}
@@ -197,6 +207,7 @@ class Arena:
                        "message": self.hub.status.message},
             "fees": {k: v for k, v in self.fees.to_json(now).items() if k != "tiers"},
             "regimes": {b.id: b.regimes for b in self.bots},
+            "oracle": self.oracle.to_json() if hasattr(self.oracle, "to_json") else None,
         }
 
     def equity_json(self, max_points: int = 1500) -> dict:

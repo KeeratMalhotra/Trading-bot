@@ -56,7 +56,7 @@ export default function App() {
       <Header />
       <TickerTape />
       <main className="flex-1 min-h-0 grid gap-3 p-3 lg:grid-rows-[auto_minmax(260px,1fr)_minmax(200px,34%)] lg:grid-cols-12">
-        <div className="lg:col-span-12 grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="lg:col-span-12 grid grid-cols-2 md:grid-cols-3 2xl:grid-cols-6 gap-3">
           {live.bots.map((b) => (
             <BotCard key={b.id} bot={b} />
           ))}
@@ -97,7 +97,7 @@ function ChartPanel() {
   const symbols = useStore((s) => s.meta?.symbols ?? []);
   const camUntil = useStore((s) => s.camUntil);
   const q = live?.prices.find((p) => p.s === symbol);
-  const regime = live?.regimes?.high?.[symbol] ?? live?.regimes?.medium?.[symbol];
+  const regime = live?.regimes?.high?.[symbol] ?? live?.regimes?.oracle?.[symbol];
   const rg = regime ? REGIME[regime] : null;
 
   return (

@@ -1,0 +1,11 @@
+{
+  "generated": "2026-09-26",
+  "method": "Walk-forward: retrained every 60 days on past data only (purged + 24h embargo). Replayed through the real trading engine with Coinbase Advanced 2 fees. Design frozen on the development period; holdout never used while designing.",
+  "model": {"type": "Gradient-boosted regression trees (2-model ensemble)", "features": 64, "coins": 10,
+            "history": "Hourly Coinbase candles since 2020-01-01", "auc_unfiltered": 0.556},
+  "dev": {"period": "2022-01-01 to 2026-03-26", "return_pct": 34.5, "max_dd_pct": 25.1, "trades": 407,
+          "win_rate": 0.46, "avg_r": 0.10, "hodl_return_pct": 52.5, "hodl_max_dd_pct": 67.4},
+  "holdout": {"period": "2026-03-26 to 2026-09-26", "return_pct": 12.4, "max_dd_pct": 3.5, "trades": 17,
+              "win_rate": 0.71, "avg_r": 0.80, "hodl_return_pct": 17.8, "hodl_max_dd_pct": 28.6},
+  "caveat": "Most of the edge comes from only trading while BTC is above its 200-day average. The model's own forecasts are only modestly better than chance."
+}

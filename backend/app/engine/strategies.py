@@ -5,11 +5,23 @@ All levels come from CLOSED candles, so signals never repaint.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 
 from .indicators import Ind
 from .regime import Regime
+
+
+@dataclass
+class Ctx:
+    """What a strategy may look at besides its own coin: other markets, ORACLE, the clock."""
+    cache: Any
+    oracle: Any = None
+    now: float = 0.0
+
+    def ind(self, symbol: str, tf: int):
+        return self.cache.get(symbol, tf)
 
 
 def fmt_price(p: float) -> str:
@@ -43,6 +55,10 @@ class Setup:
     breakeven_r: float | None = None
     trail_start_r: float | None = None
     allow_partial: bool = True
+    time_stop_bars: int | None = None   # hard exit after N signal bars, win or lose
+    close_stop: bool = False            # stop is judged on CLOSED signal bars (daily systems)
+    hard_stop: float | None = None      # intraday disaster stop when close_stop=True
+    rank: float | None = None           # ordering when several setups compete (default: confidence)
 
 
 @dataclass
@@ -61,6 +77,9 @@ STRATEGY_NAMES = {
     "mean_reversion": "Mean Reversion",
     "momentum": "Momentum",
     "trend_ride": "Trend Ride",
+    "trend_follow": "Daily Trend",
+    "oracle": "ML Forecast",
+    "hodl": "Buy & Hold",
 }
 
 
@@ -74,7 +93,7 @@ def _stop_bounds(price: float, stop: float, atr: float, lo_atr: float = 1.0, hi_
 
 
 # --------------------------------------------------------------- trend pullback
-def trend_pullback(sig: Ind, trend: Ind, rg: Regime, price: float) -> Result:
+def trend_pullback(sig: Ind, trend: Ind, rg: Regime, price: float, ctx=None) -> Result:
     s, c = sig.symbol, coin(sig.symbol)
     atr = sig.atr_now
     if rg.trend != "up":
@@ -109,7 +128,7 @@ def trend_pullback(sig: Ind, trend: Ind, rg: Regime, price: float) -> Result:
 
 
 # --------------------------------------------------------------------- breakout
-def breakout(sig: Ind, trend: Ind, rg: Regime, price: float) -> Result:
+def breakout(sig: Ind, trend: Ind, rg: Regime, price: float, ctx=None) -> Result:
     s, c = sig.symbol, coin(sig.symbol)
     atr = sig.atr_now
     level = float(np.max(sig.h[-21:-1]))
@@ -118,6 +137,9 @@ def breakout(sig: Ind, trend: Ind, rg: Regime, price: float) -> Result:
         return Watch("breakout", s, f"{c} higher timeframe is in a downtrend. Breakouts there usually fail.", 0.05)
     if sig.close <= level:
         gap = (level - price) / price * 100
+        if gap <= 0:
+            return Watch("breakout", s, f"{c} is testing resistance at {fmt_price(level)} right now. "
+                         "Needs a candle CLOSE above it, with volume, to count.", 0.75)
         return Watch("breakout", s, f"{c} resistance at {fmt_price(level)} is {gap:.2f}% away. Watching for a breakout with volume.",
                      _clamp(0.7 - gap / 2, 0.1, 0.7))
     if vol_ratio < 1.4:
@@ -138,7 +160,7 @@ def breakout(sig: Ind, trend: Ind, rg: Regime, price: float) -> Result:
 
 
 # --------------------------------------------------------------- mean reversion
-def mean_reversion(sig: Ind, trend: Ind, rg: Regime, price: float) -> Result:
+def mean_reversion(sig: Ind, trend: Ind, rg: Regime, price: float, ctx=None) -> Result:
     s, c = sig.symbol, coin(sig.symbol)
     atr = sig.atr_now
     if rg.name not in ("RANGING", "VOLATILE") or rg.adx >= 24:
@@ -165,7 +187,7 @@ def mean_reversion(sig: Ind, trend: Ind, rg: Regime, price: float) -> Result:
 
 
 # --------------------------------------------------------------------- momentum
-def momentum(sig: Ind, trend: Ind, rg: Regime, price: float) -> Result:
+def momentum(sig: Ind, trend: Ind, rg: Regime, price: float, ctx=None) -> Result:
     s, c = sig.symbol, coin(sig.symbol)
     atr = sig.atr_now
     if sig.n < 14:
@@ -189,7 +211,7 @@ def momentum(sig: Ind, trend: Ind, rg: Regime, price: float) -> Result:
 
 
 # ------------------------------------------------------------------- trend ride
-def trend_ride(sig: Ind, trend: Ind, rg: Regime, price: float) -> Result:
+def trend_ride(sig: Ind, trend: Ind, rg: Regime, price: float, ctx=None) -> Result:
     """Classic trend following: join a fresh uptrend early, wide stop, ride it with a trailing stop."""
     s, c = sig.symbol, coin(sig.symbol)
     atr = sig.atr_now
@@ -216,7 +238,108 @@ def trend_ride(sig: Ind, trend: Ind, rg: Regime, price: float) -> Result:
                  target_rr=8.0, trail_atr=3.0, breakeven_r=2.0, trail_start_r=2.0, allow_partial=False)
 
 
+# ---------------------------------------------------------------- NOMAD (daily)
+def btc_risk_on(ctx) -> tuple[bool | None, float, float]:
+    """BTC's last completed daily close vs its 200-day simple average."""
+    if ctx is None:
+        return None, 0.0, 0.0
+    b = ctx.ind("BTC-USD", 86400)
+    if b is None or b.n < 200:
+        return None, 0.0, 0.0
+    sma200 = float(np.mean(b.c[-200:]))
+    return bool(b.c[-1] > sma200), float(b.c[-1]), sma200
+
+
+def atr_sma(ind: Ind, n: int = 20) -> float:
+    h, l, c = ind.h, ind.l, ind.c
+    pc = np.concatenate([[c[0]], c[:-1]])
+    tr = np.maximum(h - l, np.maximum(np.abs(h - pc), np.abs(l - pc)))
+    return float(np.mean(tr[-n:]))
+
+
+def trend_follow(sig: Ind, trend: Ind, rg: Regime, price: float, ctx=None) -> Result:
+    """Donchian breakout on daily closes, only while BTC is above its 200-day average."""
+    s, c = sig.symbol, coin(sig.symbol)
+    if sig.n < 61:
+        return Watch("trend_follow", s, f"{c} needs 60 days of history first.", 0.0)
+    on, btc_c, btc_sma = btc_risk_on(ctx)
+    if on is None:
+        return Watch("trend_follow", s, "Waiting for 200 days of BTC history to judge the market regime.", 0.0)
+    if not on:
+        gap = (btc_sma / btc_c - 1) * 100
+        return Watch("trend_follow", s, f"Risk-off: BTC is {gap:.1f}% below its 200-day average ({fmt_price(btc_sma)}). "
+                     "NOMAD stays in cash until the bull market returns.", 0.3)
+    hi20 = float(np.max(sig.h[-21:-1]))
+    sma50 = float(np.mean(sig.c[-50:]))
+    close = sig.close
+    mom = close / float(sig.c[-61]) - 1
+    if not (close > hi20 and close > sma50):
+        gap = (hi20 / close - 1) * 100
+        return Watch("trend_follow", s, f"{c} closed {gap:.1f}% under its 20-day high ({fmt_price(hi20)}). "
+                     "A daily close above it would start a trend trade.", max(0.05, 0.6 - gap / 10))
+    a = atr_sma(sig)
+    return Setup("trend_follow", s, close, close - 2 * a, None, 60 + min(max(mom * 100, 0), 35),
+                 f"{c} closed at a new 20-day high in a bull market",
+                 [f"Daily close {fmt_price(close)} > 20-day high {fmt_price(hi20)}",
+                  f"Above its 50-day average; 60-day momentum {mom * 100:+.0f}%",
+                  "No profit target: a trailing stop 3 ATR under the best close lets the trend run"],
+                 a, target_rr=50, close_stop=True, hard_stop=close - 3.5 * a, allow_partial=False, rank=mom)
+
+
+def review_trend_follow(pos, sig: Ind, ctx) -> str | None:
+    """Called once per new daily bar for an open NOMAD position. Returns an exit reason or None."""
+    close = sig.close
+    a = atr_sma(sig)
+    pos.peak_close = max(pos.peak_close or pos.entry_price, close)
+    chand = pos.peak_close - 3 * a
+    if chand > pos.stop:
+        pos.stop = chand
+        pos.trailing = True
+    lo10 = float(np.min(sig.l[-11:-1]))
+    on, _, _ = btc_risk_on(ctx)
+    if close < pos.stop:
+        return "TRAILING_STOP" if pos.trailing else "STOP_LOSS"
+    if close < lo10:
+        return "CHANNEL_EXIT"
+    if on is False:
+        return "REGIME_EXIT"
+    return None
+
+
+# -------------------------------------------------------------------- ORACLE
+def oracle(sig: Ind, trend: Ind, rg: Regime, price: float, ctx=None) -> Result:
+    s, c = sig.symbol, coin(sig.symbol)
+    o = getattr(ctx, "oracle", None)
+    if o is None or not o.ready:
+        msg = o.status_text if o is not None else "Model offline."
+        return Watch("oracle", s, msg, 0.0)
+    pr = o.prediction(s, int(sig.t[-1]))
+    if pr is None:
+        return Watch("oracle", s, f"No fresh forecast for {c} yet.", 0.0)
+    pred, thr = pr["pred"], pr["thr"]
+    if not pr["regime"]:
+        return Watch("oracle", s, f"{c} forecast {pred:+.2f}R, but BTC is below its 200-day average. "
+                     "In walk-forward tests ORACLE only had an edge in risk-on markets, so it stands aside.",
+                     0.2 + 0.1 * max(min(pred, 1.5), -1))
+    if pred < thr:
+        return Watch("oracle", s, f"{c} 14-day forecast {pred:+.2f}R. Needs {thr:+.2f}R (its top-10% bar) to trade.",
+                     _clamp(0.45 + (pred - thr), 0.15, 0.85))
+    dvol = pr["dvol"]
+    stop = price * (1 - 2 * dvol)
+    target = price * (1 + 4 * dvol)
+    return Setup("oracle", s, price, stop, target, _clamp(80 + 10 * (pred - thr), 80, 99),
+                 f"ORACLE forecasts {pred:+.2f}R for {c} over the next 14 days",
+                 pr.get("reasons", [])[:3] + [f"Forecast beats its trade bar ({thr:+.2f}R)"],
+                 price * dvol, target_rr=2.0, breakeven_r=99, trail_start_r=99, allow_partial=False,
+                 time_stop_bars=336, rank=pred)
+
+
+REVIEWERS = {"trend_follow": review_trend_follow}
+
+
 STRATEGIES = {
+    "oracle": oracle,
+    "trend_follow": trend_follow,
     "trend_ride": trend_ride,
     "trend_pullback": trend_pullback,
     "breakout": breakout,

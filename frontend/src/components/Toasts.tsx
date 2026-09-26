@@ -2,9 +2,7 @@ import { useEffect } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import clsx from "clsx";
 import { CircleCheck, CircleX, OctagonAlert, Rocket, Sparkles } from "lucide-react";
-import { useStore, botColor, type Toast } from "../store";
-
-const NAMES: Record<string, string> = { low: "SENTINEL", medium: "TACTICIAN", high: "BERSERKER", system: "ARENA" };
+import { useStore, botColor, botName, type Toast } from "../store";
 
 /** Big, stream-friendly trade announcements. */
 export function Toasts() {
@@ -51,7 +49,7 @@ function ToastCard({ t }: { t: Toast }) {
         </div>
         <div className="min-w-0">
           <div className="text-[10px] font-bold tracking-[0.2em]" style={{ color: col }}>
-            {NAMES[ev.bot]}
+            {botName(ev.bot)}
           </div>
           <div className={clsx("text-base font-bold text-white leading-tight")}>{ev.title}</div>
           <div className="text-xs text-ink-300 line-clamp-2">{ev.text}</div>

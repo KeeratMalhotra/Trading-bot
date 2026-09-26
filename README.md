@@ -1,14 +1,19 @@
 # Bot Battle: AI Crypto Trading Arena
 
-Three trading bots with different risk levels each get **$10,000 in demo money** and trade live crypto markets against each other. Every thought, order, fill, stop move and exit shows up on a dashboard built for streaming.
+Six bots each get **$10,000 in demo money** and trade live crypto markets against each other: a machine-learning bot, a trend follower, three rule-based bots with different risk levels, and a buy-and-hold benchmark. Every thought, forecast, order, fill, stop move and exit shows up on a dashboard built for streaming.
 
 ![Dashboard](docs/screenshots/dashboard.png)
 
-| Bot | Risk | Style |
+| Bot | Type | Style |
 |---|---|---|
+| **ORACLE** 🟣 | Machine learning (Gen 2) | Gradient-boosted model trained on 6 years of hourly data from 10 coins (64 features). Forecasts each coin's 14-day trade outcome every hour and trades only its top 10% of forecasts, only while BTC is above its 200-day average. Retrains daily. |
+| **NOMAD** 🔵 | Trend follower (Gen 2) | Daily charts. Buys 20-day-high breakouts in a bull market, no profit target, 3-ATR trailing stop judged on daily closes, goes to cash when BTC falls below its 200-day average. A few trades a month. |
 | **SENTINEL** 🟢 | Low | 0.5% risk per trade, BTC & ETH only, 1h signals / 6h trend, limit (maker) entries, −2% daily circuit breaker |
 | **TACTICIAN** 🟡 | Medium | 1% risk per trade, 6 majors, 15m signals / 1h trend, limit entries, −4% daily circuit breaker |
 | **BERSERKER** 🔴 | High | 2% risk per trade, all 10 coins incl. volatile alts, 15m / 1h, market (taker) orders, big size, −8% daily circuit breaker |
+| **HODL** ⚪ | Benchmark | Buys BTC once at the start and never sells. The line every bot has to beat. |
+
+The SENTINEL/TACTICIAN/BERSERKER rows are the Gen 1 rule bots: Low, Medium and High risk.
 
 ## Quick start
 
@@ -69,7 +74,41 @@ Battle state is saved in SQLite, so restarting keeps balances, open trades and h
   - Position size is cut after 3 or 5 losses in a row.
   - A strategy is **benched** for 6h after it loses about 3.5R over its last 5 trades.
 
-## Honest backtest
+## ORACLE: how it was trained and tested
+
+- **Data**: every hourly Coinbase candle for 10 coins since 2020-01-01 (about 460k candles), cached in `DATA_DIR/history`.
+- **Features (64)**: momentum over 1h to 30 days, volatility regime, trend distance, ADX, RSI, Bollinger squeeze, range position, drawdown, volume, candle shape, time of day. Also BTC context, relative strength vs BTC, cross-coin momentum rank, and market breadth. Every feature uses only data up to the moment of the decision.
+- **Target**: the outcome of a long trade with a stop at 2× daily volatility, a target at 4×, and a 14-day limit, measured in R (1R = the planned risk).
+- **Validation**:
+  - Walk-forward: retrained every 60 days on past data only, with purging and a 24h embargo so no future information leaks in.
+  - The design was chosen on **2022-01 → 2026-03** only. The last 6 months (**2026-03-26 → today**) were kept aside as an untouched **holdout** and checked once, at the end.
+  - Both periods were then replayed through the real trading engine (`app.backtest_long`) with fees.
+- **Live**: at first start it downloads the history (about 3 minutes), trains in seconds, retrains daily, and forecasts every hour. Its forecasts appear in the **Oracle forecasts** panel.
+
+```bash
+cd backend
+.venv/bin/python -m app.ml.research --tp 4 --sl 2 --horizon 336 --kind reg --retrain-days 60 --tag _Dr   # walk-forward
+.venv/bin/python -m app.backtest_long --period dev        # 2022-01-01 .. 2026-03-26
+.venv/bin/python -m app.backtest_long --period holdout    # 2026-03-26 .. now
+```
+
+### Results: real engine, $10,000 start, Coinbase Advanced 2 fees
+
+| Bot | Dev 2022–2026/03 | Max drop | Holdout 2026/03–09 | Max drop |
+|---|---|---|---|---|
+| ORACLE | **+34.5%** (407 trades, 46% wins) | 25.1% | **+12.4%** (17 trades) | 3.5% |
+| NOMAD | **+63.9%** (139 trades, 35% wins) | 27.9% | **+13.8%** (6 trades) | 7.4% |
+| SENTINEL (Gen 1) | −26.2% | 26.2% | −3.4% | 3.7% |
+| HODL BTC | +52.5% | **67.4%** | +17.8% | 28.6% |
+
+How to read this:
+- **The Gen 2 bots are the first ones that made money after fees.** They did it through both the 2022 crash and the 2026 holdout. The Gen 1 intraday bots lost steadily.
+- **Neither beat simply holding BTC on raw return in the holdout.** NOMAD beat it over the development period. Their real strength is risk: roughly half of HODL's worst drop in dev, and a fifth or less in the holdout. They sat in cash through the 2022 crash while HODL fell 65%.
+- **The ML model is only modestly predictive.** Out-of-sample AUC is about 0.56 (0.5 = coin flip). Most of ORACLE's edge comes from the bull-market filter. In the holdout, the filter alone did as well as the model.
+- **Small changes matter.** NOMAD ranged from +64% to +82% depending only on its circuit-breaker setting. ORACLE made +4% with passive limit entries versus +34.5% with market entries (limit orders filled more on losers). Treat any single number as ±20%.
+- The holdout has very few trades. It is evidence, not proof.
+
+## Gen 1 5-minute backtest
 
 Real Coinbase history replayed through the exact same engine. Each 5-minute candle is split into 4 ticks, and stops are checked before targets.
 
@@ -92,6 +131,8 @@ What this means:
 - High risk mostly bought pain.
 
 This is typical for short-term trading. It's also great content: viewers see *why* most traders lose, in real numbers. Past results don't predict future ones.
+
+The 1-hour Gen 1 bot (SENTINEL) also runs in the 4-year replay above. TACTICIAN and BERSERKER need sub-hour candles, so they are tested with this 5-minute replay only.
 
 ## Configuration (`.env`)
 
@@ -127,9 +168,11 @@ backend/app/
   engine/      indicators, regime, strategies, risk manager, bot brain
   execution/   venue interface, paper exchange, fee tiers, Coinbase live adapter
   accounting/  FIFO portfolio, US tax engine
-  arena.py     runs the 3 bots, persistence, views
+  ml/          ORACLE: history store, features, walk-forward research, live service
+  arena.py     runs the 6 bots, persistence, views
   main.py      FastAPI REST + WebSocket, serves the dashboard
-  backtest.py  historical replay
+  backtest.py       5-minute historical replay (Gen 1 bots)
+  backtest_long.py  multi-year hourly replay of the real engine (ORACLE, NOMAD, SENTINEL, HODL)
 frontend/src/  React + Tailwind + lightweight-charts dashboard
 ```
 

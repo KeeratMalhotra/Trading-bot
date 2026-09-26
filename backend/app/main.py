@@ -22,6 +22,7 @@ from .config import (ADMIN_TOKEN, COINBASE_FEE_TIERS, DB_PATH, MARKET_SOURCE, ST
                      TIMEFRAMES)
 from .market import coinbase, simulated
 from .market.hub import MarketHub
+from .ml.oracle import OracleService
 from .storage import Store
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -49,6 +50,7 @@ class State:
     clients: dict[WebSocket, dict]
     stop: asyncio.Event
     tasks: list[asyncio.Task]
+    oracle: OracleService
 
 
 S = State()
@@ -57,8 +59,9 @@ S = State()
 async def _start_market(hub: MarketHub) -> None:
     if MARKET_SOURCE != "sim":
         try:
-            await asyncio.wait_for(coinbase.load_history(hub), timeout=90)
+            await asyncio.wait_for(coinbase.load_history(hub), timeout=120)
             S.tasks.append(asyncio.create_task(coinbase.run_ticker(hub, S.stop)))
+            S.tasks.append(asyncio.create_task(coinbase.resync_loop(hub, S.stop)))
             return
         except Exception as e:  # noqa: BLE001
             log.warning("Coinbase history failed (%s)", e)
@@ -117,7 +120,9 @@ async def lifespan(app: FastAPI):
     S.store = Store(DB_PATH)
     S.hub = MarketHub(SYMBOLS)
     await _start_market(S.hub)
-    S.arena = Arena(S.hub, S.store)
+    S.oracle = OracleService()
+    S.tasks.append(asyncio.create_task(S.oracle.run(S.stop)))
+    S.arena = Arena(S.hub, S.store, oracle=S.oracle)
     now = time.time()
     restored = S.arena.load(now)
     S.arena.start(now)

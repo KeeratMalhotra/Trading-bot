@@ -1,11 +1,9 @@
 import { AnimatePresence, motion } from "motion/react";
 import clsx from "clsx";
 import { useEffect, useState } from "react";
-import { useStore, botColor } from "../store";
+import { useStore, botColor, botName } from "../store";
 import type { Position } from "../types";
 import { coin, duration, pct, price, tone, usd } from "../lib/format";
-
-const NAMES: Record<string, string> = { low: "SENTINEL", medium: "TACTICIAN", high: "BERSERKER" };
 
 export function ActiveTrades() {
   const positions = useStore((s) => s.live?.positions ?? []);
@@ -58,12 +56,15 @@ export function ActiveTrades() {
 
 function Row({ p, now, onClick }: { p: Position; now: number; onClick: () => void }) {
   const col = botColor(p.bot);
+  const target = p.target ?? Math.max(p.price, p.entry + 3 * (p.entry - p.initial_stop));
   const lo = Math.min(p.stop, p.initial_stop, p.price);
-  const hi = Math.max(p.target, p.price);
+  const hi = Math.max(target, p.price);
   const span = hi - lo || 1;
   const x = (v: number) => ((v - lo) / span) * 100;
   const up = p.price >= p.entry;
-  const badge = p.status === "opening" ? "FILLING" : p.status === "closing" ? "CLOSING" : p.trailing ? "TRAILING" : p.be ? "RISK-FREE" : null;
+  const badge =
+    p.bot === "hodl" ? "FOREVER" : p.status === "opening" ? "FILLING" : p.status === "closing" ? "CLOSING" : p.trailing ? "TRAILING" : p.be ? "RISK-FREE" : null;
+  const left = p.expires ? p.expires - now : null;
 
   return (
     <motion.div
@@ -77,7 +78,7 @@ function Row({ p, now, onClick }: { p: Position; now: number; onClick: () => voi
       <div className="flex items-center gap-2">
         <span className="w-2 h-2 rounded-full" style={{ background: col }} />
         <span className="text-[11px] font-bold tracking-wider" style={{ color: col }}>
-          {NAMES[p.bot]}
+          {botName(p.bot)}
         </span>
       </div>
       <div className="leading-tight">
@@ -124,11 +125,14 @@ function Row({ p, now, onClick }: { p: Position; now: number; onClick: () => voi
           {p.stop > p.initial_stop && <div className="absolute -top-0.5 w-[2px] h-3 bg-down" style={{ left: `${x(p.stop)}%` }} />}
         </div>
         <div className="flex justify-between mt-1 num text-[9px]">
-          <span className="text-down">{price(p.stop)}</span>
-          <span className="text-up">{price(p.target)}</span>
+          <span className="text-down">{p.bot === "hodl" ? "no stop" : price(p.stop)}</span>
+          <span className="text-up">{p.bot === "hodl" ? "no target" : p.target == null ? "rides trend" : price(p.target)}</span>
         </div>
       </div>
-      <div className="num text-[11px] text-ink-300 text-right">{duration(now - p.opened)}</div>
+      <div className="num text-[11px] text-ink-300 text-right leading-tight">
+        {duration(now - p.opened)}
+        {left != null && <div className="text-[9px] text-[#c4b5fd]">{left > 0 ? `${duration(left)} left` : "expiring"}</div>}
+      </div>
     </motion.div>
   );
 }

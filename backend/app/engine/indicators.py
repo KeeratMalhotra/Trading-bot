@@ -4,33 +4,33 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+from scipy.signal import lfilter
 
 from ..market.candles import CandleSeries
 
 
 def ema(x: np.ndarray, n: int) -> np.ndarray:
-    out = np.empty_like(x)
+    """EMA seeded with the first value (vectorised IIR filter)."""
     if len(x) == 0:
-        return out
+        return np.empty_like(x)
     a = 2.0 / (n + 1)
-    prev = float(x[0])
-    for i, v in enumerate(x.tolist()):
-        prev = prev + a * (v - prev)
-        out[i] = prev
-    return out
+    y, _ = lfilter([a], [1.0, a - 1.0], x, zi=[(1.0 - a) * x[0]])
+    return y
 
 
 def wilder(x: np.ndarray, n: int) -> np.ndarray:
-    out = np.empty_like(x)
+    """Wilder smoothing seeded with the mean of the first n values."""
+    out = np.empty_like(x, dtype=float)
     if len(x) == 0:
         return out
-    prev = float(np.mean(x[:n])) if len(x) >= n else float(x[0])
-    for i, v in enumerate(x.tolist()):
-        if i < n:
-            out[i] = prev
-            continue
-        prev = prev + (v - prev) / n
-        out[i] = prev
+    if len(x) < n:
+        out[:] = float(x[0])
+        return out
+    m = float(np.mean(x[:n]))
+    out[:n] = m
+    if len(x) > n:
+        a = 1.0 / n
+        out[n:], _ = lfilter([a], [1.0, a - 1.0], x[n:], zi=[(1.0 - a) * m])
     return out
 
 

@@ -13,12 +13,10 @@ import {
   type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
-import { useStore, botColor } from "../store";
+import { useStore, botColor, botName } from "../store";
 import { baseChartOptions } from "../lib/chart";
 import type { Candle } from "../types";
 import { usd } from "../lib/format";
-
-const NAMES: Record<string, string> = { low: "SENTINEL", medium: "TACTICIAN", high: "BERSERKER" };
 
 function precisionFor(p: number) {
   if (p >= 1000) return 2;
@@ -36,6 +34,7 @@ export function PriceChart({ symbol, tf }: { symbol: string; tf: number }) {
   const lines = useRef<Map<string, IPriceLine>>(new Map());
   const range = useRef<{ first: number; last: number }>({ first: 0, last: 0 });
   const [loaded, setLoaded] = useState(0);
+  const levels = useRef<number[]>([]);
 
   const candle = useStore((s) => s.candle);
   const trades = useStore((s) => s.trades);
@@ -55,6 +54,13 @@ export function PriceChart({ symbol, tf }: { symbol: string; tf: number }) {
       borderVisible: false,
       wickUpColor: "rgba(34,197,94,0.7)",
       wickDownColor: "rgba(244,63,94,0.7)",
+      // keep every open trade's entry / stop / target on screen
+      autoscaleInfoProvider: (orig: () => { priceRange: { minValue: number; maxValue: number } } | null) => {
+        const r = orig();
+        const lv = levels.current;
+        if (!r || !lv.length) return r;
+        return { ...r, priceRange: { minValue: Math.min(r.priceRange.minValue, ...lv), maxValue: Math.max(r.priceRange.maxValue, ...lv) } };
+      },
     });
     volume.current = c.addSeries(HistogramSeries, { priceScaleId: "vol", priceFormat: { type: "volume" }, lastValueVisible: false, priceLineVisible: false });
     c.priceScale("vol").applyOptions({ scaleMargins: { top: 0.84, bottom: 0 } });
@@ -117,18 +123,18 @@ export function PriceChart({ symbol, tf }: { symbol: string; tf: number }) {
     for (const t of trades) {
       if (t.symbol !== symbol) continue;
       const col = botColor(t.bot);
-      out.push({ time: bucket(t.opened) as UTCTimestamp, position: "belowBar", shape: "arrowUp", color: col, text: `${NAMES[t.bot][0]} BUY` });
+      out.push({ time: bucket(t.opened) as UTCTimestamp, position: "belowBar", shape: "arrowUp", color: col, text: `${botName(t.bot)[0]} BUY` });
       out.push({
         time: bucket(t.closed) as UTCTimestamp,
         position: "aboveBar",
         shape: "arrowDown",
         color: t.net >= 0 ? "#22c55e" : "#f43f5e",
-        text: `${NAMES[t.bot][0]} ${usd(t.net, { sign: true })}`,
+        text: `${botName(t.bot)[0]} ${usd(t.net, { sign: true })}`,
       });
     }
     for (const p of positions) {
-      if (p.symbol !== symbol || p.status === "opening") continue;
-      out.push({ time: bucket(p.opened) as UTCTimestamp, position: "belowBar", shape: "arrowUp", color: botColor(p.bot), text: `${NAMES[p.bot][0]} BUY` });
+      if (p.symbol !== symbol || p.status === "opening" || p.bot === "hodl") continue;
+      out.push({ time: bucket(p.opened) as UTCTimestamp, position: "belowBar", shape: "arrowUp", color: botColor(p.bot), text: `${botName(p.bot)[0]} BUY` });
     }
     return out.sort((a, b) => (a.time as number) - (b.time as number));
   }, [trades, positions, symbol, tf]);
@@ -146,10 +152,11 @@ export function PriceChart({ symbol, tf }: { symbol: string; tf: number }) {
     const want = new Map<string, { price: number; color: string; title: string; style: LineStyle }>();
     for (const p of positions) {
       if (p.symbol !== symbol) continue;
-      const n = NAMES[p.bot];
+      const n = botName(p.bot);
       want.set(`${p.id}:e`, { price: p.entry, color: botColor(p.bot), title: `${n} ENTRY`, style: LineStyle.Dashed });
       want.set(`${p.id}:s`, { price: p.stop, color: "#f43f5e", title: `${n} ${p.trailing ? "TRAIL" : "STOP"}`, style: LineStyle.Dotted });
-      want.set(`${p.id}:t`, { price: p.target, color: "#22c55e", title: `${n} TARGET`, style: LineStyle.Dotted });
+      if (p.target != null) want.set(`${p.id}:t`, { price: p.target, color: "#22c55e", title: `${n} TARGET`, style: LineStyle.Dotted });
+      if (p.hard_stop != null) want.set(`${p.id}:h`, { price: p.hard_stop, color: "rgba(244,63,94,0.45)", title: `${n} EMERGENCY`, style: LineStyle.Dotted });
     }
     for (const [k, l] of lines.current) {
       if (!want.has(k)) {
@@ -157,6 +164,7 @@ export function PriceChart({ symbol, tf }: { symbol: string; tf: number }) {
         lines.current.delete(k);
       }
     }
+    levels.current = [...want.entries()].filter(([k]) => !k.endsWith(":h")).map(([, v]) => v.price);
     for (const [k, v] of want) {
       const opts = { price: v.price, color: v.color, title: v.title, lineStyle: v.style, lineWidth: 1 as const, axisLabelVisible: true };
       const l = lines.current.get(k);

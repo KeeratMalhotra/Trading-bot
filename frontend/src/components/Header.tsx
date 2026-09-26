@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Settings, Swords, Volume2, VolumeX, Video, VideoOff } from "lucide-react";
 import clsx from "clsx";
 import { useStore } from "../store";
-import { duration, pct } from "../lib/format";
+import { duration, pct, usd } from "../lib/format";
 import { sounds } from "../lib/sound";
 
 function useNow(ms = 1000) {
@@ -34,6 +34,7 @@ export function Header() {
   const isSim = market?.source === "sim";
   const ok = connected && market?.connected;
   const elapsed = meta ? now / 1000 - meta.started : 0;
+  const feesPaid = (live?.bots ?? []).reduce((a, b) => a + b.all.fees, 0);
 
   return (
     <header className="flex items-center gap-4 px-5 h-14 shrink-0">
@@ -43,7 +44,7 @@ export function Header() {
         </div>
         <div className="leading-tight">
           <div className="text-[15px] font-bold tracking-[0.18em] text-white">BOT BATTLE</div>
-          <div className="text-[11px] text-ink-400">3 AI traders · $10K each · live crypto markets</div>
+          <div className="text-[11px] text-ink-400">{live?.bots.length ?? 6} trading bots · $10K each · live crypto markets</div>
         </div>
       </div>
 
@@ -74,6 +75,10 @@ export function Header() {
       </div>
 
       <div className="ml-auto flex items-center gap-5">
+        <div className="text-right leading-tight" title="Total fees all bots have paid the exchange">
+          <div className="text-[10px] uppercase tracking-widest text-ink-400">Fees paid to Coinbase</div>
+          <div className="num text-sm text-down">{usd(feesPaid)}</div>
+        </div>
         {meta && (
           <div className="text-right leading-tight hidden md:block">
             <div className="text-[10px] uppercase tracking-widest text-ink-400">Battle time</div>

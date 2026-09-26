@@ -14,11 +14,9 @@ import {
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
-import { useStore, botColor } from "../store";
+import { useStore, botColor, botName } from "../store";
 import type { BotEvent } from "../types";
 import { timeET } from "../lib/format";
-
-const NAMES: Record<string, string> = { low: "SENTINEL", medium: "TACTICIAN", high: "BERSERKER", system: "ARENA" };
 
 function iconFor(ev: BotEvent) {
   switch (ev.kind) {
@@ -47,13 +45,6 @@ function iconFor(ev: BotEvent) {
   }
 }
 
-const FILTERS = [
-  { id: "all", label: "All" },
-  { id: "trades", label: "Trades" },
-  { id: "low", label: "Sentinel" },
-  { id: "medium", label: "Tactician" },
-  { id: "high", label: "Berserker" },
-];
 const TRADE_KINDS = new Set(["order", "fill", "open", "close", "partial", "stop", "risk"]);
 
 export function Feed() {
@@ -61,6 +52,7 @@ export function Feed() {
   const filter = useStore((s) => s.feedFilter);
   const setS = useStore((s) => s.set);
   const focus = useStore((s) => s.focus);
+  const bots = useStore((s) => s.live?.bots ?? []);
 
   const shown = events
     .filter((e) => {
@@ -78,8 +70,11 @@ export function Feed() {
           <span className="live-dot text-up" />
           <span className="panel-title">Live bot brain</span>
         </div>
-        <div className="flex gap-1">
-          {FILTERS.map((f) => (
+        <div className="flex gap-1 items-center">
+          {[
+            { id: "all", label: "All" },
+            { id: "trades", label: "Trades" },
+          ].map((f) => (
             <button
               key={f.id}
               onClick={() => setS({ feedFilter: f.id })}
@@ -89,6 +84,16 @@ export function Feed() {
               )}
             >
               {f.label}
+            </button>
+          ))}
+          {bots.map((b) => (
+            <button
+              key={b.id}
+              title={b.name}
+              onClick={() => setS({ feedFilter: filter === b.id ? "all" : b.id })}
+              className={clsx("grid place-items-center w-6 h-6 rounded-md transition-colors", filter === b.id ? "bg-white/10" : "hover:bg-white/5")}
+            >
+              <span className="w-2 h-2 rounded-full" style={{ background: b.color, opacity: filter === b.id || filter === "all" ? 1 : 0.4 }} />
             </button>
           ))}
         </div>
@@ -139,7 +144,7 @@ function FeedItem({ ev, onClick }: { ev: BotEvent; onClick: () => void }) {
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 text-[10px]">
           <span className="font-bold tracking-widest" style={{ color: col }}>
-            {NAMES[ev.bot]}
+            {botName(ev.bot)}
           </span>
           {conf != null && <span className="num text-ink-300 bg-white/5 rounded px-1">{conf}% conf</span>}
           <span className="num text-ink-400 ml-auto">{timeET(ev.ts)}</span>

@@ -20,7 +20,7 @@ from ..market.hub import MarketHub
 from . import risk
 from .indicators import IndicatorCache
 from .regime import Regime, classify
-from .strategies import STRATEGIES, STRATEGY_NAMES, Setup, Watch, coin, fmt_price
+from .strategies import REVIEWERS, STRATEGIES, STRATEGY_NAMES, Ctx, Setup, Watch, coin, fmt_price
 
 ET = ZoneInfo("America/New_York")
 _evt_ids = itertools.count(1)
@@ -33,6 +33,10 @@ EXIT_LABELS = {
     "TIME_STOP": "Time stop",
     "CIRCUIT_BREAKER": "Circuit breaker",
     "MANUAL": "Closed manually",
+    "CHANNEL_EXIT": "Closed below its 10-day low",
+    "REGIME_EXIT": "Bear-market filter",
+    "DISASTER_STOP": "Emergency stop hit",
+    "FORECAST_EXPIRED": "Forecast window ended",
 }
 
 
@@ -100,6 +104,11 @@ class Position:
     exit_order_id: str = ""
     last_stop_evt_ts: float = 0.0
     last_stop_evt_price: float = 0.0
+    time_stop_bars: int = 0
+    close_stop: bool = False
+    hard_stop: float = 0.0
+    peak_close: float = 0.0
+    last_review_bar: int = 0
     gain_st: float = 0.0
     gain_lt: float = 0.0
     slippage_bps: float = 0.0
@@ -127,6 +136,7 @@ class Bot:
         self.cache = cache
         self.tax_settings = tax_settings
         self.starting_balance = starting_balance
+        self.oracle = None  # set by the arena for ORACLE
         self.reset(starting_balance)
 
     # ================================================================ state
@@ -284,6 +294,10 @@ class Bot:
         r_now = pos.r_at(price)
         pos.max_r, pos.min_r = max(pos.max_r, r_now), min(pos.min_r, r_now)
 
+        if pos.close_stop:
+            if pos.hard_stop and price <= pos.hard_stop:
+                self._exit(pos, "DISASTER_STOP", now)
+            return  # daily systems judge their stop on closed bars (see _review_position)
         if price <= pos.stop:
             if pos.trailing and pos.stop > pos.entry_price:
                 reason = "TRAILING_STOP"
@@ -342,6 +356,8 @@ class Bot:
         maker, taker = self.venue.fee_rates(now)
         watches: list[Watch] = []
         regimes: dict[str, Regime] = {}
+        pending: list[tuple[Setup, Regime]] = []
+        ctx = Ctx(self.cache, self.oracle, now)
         for sym in self.p.symbols:
             if not self.hub.ready(sym):
                 continue
@@ -354,7 +370,7 @@ class Bot:
             self.regimes[sym] = rg.name
             held = self.position_for(sym)
             if held:
-                self._review_position(held, rg, now)
+                self._review_position(held, rg, now, sig, ctx)
                 continue
             if self.cooldown.get(sym, 0) > now:
                 continue
@@ -364,7 +380,7 @@ class Bot:
             for name in self.p.strategies:
                 if self.benched.get(name, 0) > now:
                     continue
-                res = STRATEGIES[name](sig, tr, rg, price)
+                res = STRATEGIES[name](sig, tr, rg, price, ctx)
                 if isinstance(res, Setup):
                     if best_setup is None or res.confidence > best_setup.confidence:
                         best_setup = res
@@ -374,9 +390,13 @@ class Bot:
                 key = (sym, best_setup.strategy, int(sig.t[-1]))
                 if key not in self.seen_setups:
                     self.seen_setups[key] = now
-                    self._consider(best_setup, rg, now, maker, taker)
+                    pending.append((best_setup, rg))
             elif best_watch:
                 watches.append(best_watch)
+        # best ideas first: when slots are limited the strongest setup gets the capital
+        pending.sort(key=lambda x: x[0].rank if x[0].rank is not None else x[0].confidence, reverse=True)
+        for setup, rg in pending:
+            self._consider(setup, rg, now, maker, taker)
         self._scan_thought(watches, regimes, now)
         self._update_status()
         if self.scan_count % 60 == 0:
@@ -396,14 +416,23 @@ class Bot:
             if pos.status == "open" and pos.qty > 0:
                 price = self.hub.price(pos.symbol)
                 pnl = self._pos_pnl(pos, price)
+                if pos.close_stop:
+                    plan = (f"Trailing stop {fmt_price(pos.stop)} on the daily close, no fixed target. "
+                            "Letting the trend decide.")
+                else:
+                    left = ""
+                    if pos.time_stop_bars:
+                        hrs = max(0.0, (pos.opened_ts + pos.time_stop_bars * self.p.signal_tf - now) / 3600)
+                        left = f" {hrs / 24:.1f} days left on the forecast."
+                    plan = f"Stop {fmt_price(pos.stop)}, target {fmt_price(pos.target)}.{left} Letting the plan work."
                 self.emit("thought", f"Holding {coin(pos.symbol)}",
-                          f"{pnl['r']:+.2f}R ({money(pnl['net'], True)} after fees). Stop {fmt_price(pos.stop)}, "
-                          f"target {fmt_price(pos.target)}. Letting the plan work.", pos.symbol)
+                          f"{pnl['r']:+.2f}R ({money(pnl['net'], True)} after fees). {plan}", pos.symbol)
                 return
         if not regimes:
             return
         # forget notes older than 15 minutes so the feed never repeats itself
-        self.recent_notes = {k: v for k, v in self.recent_notes.items() if now - v < 900}
+        ttl = min(max(900, self.p.signal_tf / 12), 7200)
+        self.recent_notes = {k: v for k, v in self.recent_notes.items() if now - v < ttl}
         fresh = [w for w in watches if w.note not in self.recent_notes and w.interest >= 0.15]
         if fresh and self.scan_count % 4 != 0:
             best = max(fresh, key=lambda w: w.interest - (0.3 if w.symbol == self.last_scan_symbol else 0))
@@ -430,12 +459,42 @@ class Bot:
         self.emit("thought", f"Scanned {n} markets ({TF_LABEL[self.p.signal_tf]})",
                   f"{', '.join(parts)}. {mood}")
 
-    def _review_position(self, pos: Position, rg: Regime, now: float) -> None:
+    def _review_position(self, pos: Position, rg: Regime, now: float, sig=None, ctx=None) -> None:
         if pos.status != "open" or pos.qty <= 0:
             return
         price = self.hub.price(pos.symbol)
         r_now = pos.r_at(price)
         bars = (now - pos.opened_ts) / self.p.signal_tf
+        c = coin(pos.symbol)
+        if pos.time_stop_bars and bars >= pos.time_stop_bars:
+            self.emit("thought", f"{c} forecast window is over",
+                      f"The prediction covered {pos.time_stop_bars * self.p.signal_tf // 86400} days and time is up. "
+                      f"Closing at {r_now:+.2f}R, exactly as the model was tested.", pos.symbol, "warn", pos=pos)
+            self._exit(pos, "FORECAST_EXPIRED", now)
+            return
+        reviewer = REVIEWERS.get(pos.strategy)
+        if reviewer and sig is not None:
+            bar = int(sig.t[-1])
+            if bar > pos.last_review_bar:
+                pos.last_review_bar = bar
+                old_stop = pos.stop
+                reason = reviewer(pos, sig, ctx)
+                if reason:
+                    why = {"CHANNEL_EXIT": f"{c} closed below its 10-day low. The trend is broken.",
+                           "REGIME_EXIT": "BTC fell below its 200-day average. Bear-market filter says: go to cash.",
+                           "TRAILING_STOP": f"{c} closed below the trailing stop {fmt_price(pos.stop)}.",
+                           "STOP_LOSS": f"{c} closed below the initial stop {fmt_price(pos.stop)}."}[reason]
+                    self.emit("thought", f"{c}: exit signal", why, pos.symbol, "warn", pos=pos)
+                    self._exit(pos, reason, now)
+                    return
+                if pos.stop > old_stop:
+                    self.emit("stop", f"{c} trailing stop raised to {fmt_price(pos.stop)}",
+                              f"New best close {fmt_price(pos.peak_close)}. Stop sits 3 ATR below it; "
+                              "checked on the daily close so normal intraday noise can't shake the trade out.",
+                              pos.symbol, "good", pos=pos)
+            return
+        if pos.trail_start_r >= 50:
+            return  # fixed-barrier trades (ORACLE) keep the exact plan they were tested with
         if bars >= self.p.max_hold_bars and r_now < 0.5:
             hours = (now - pos.opened_ts) / 3600
             self.emit("thought", f"{coin(pos.symbol)} is going nowhere",
@@ -476,7 +535,11 @@ class Bot:
             partial_price=d.partial, atr=setup.atr, planned_qty=d.qty, planned_entry=d.entry, net_rr=d.net_rr,
             trail_atr=setup.trail_atr or self.p.trail_atr, breakeven_r=setup.breakeven_r or self.p.breakeven_r,
             trail_start_r=setup.trail_start_r or self.p.trail_start_r,
+            time_stop_bars=setup.time_stop_bars or 0, close_stop=setup.close_stop,
+            hard_stop=setup.hard_stop or 0.0,
         )
+        sig = self.cache.get(setup.symbol, self.p.signal_tf)
+        pos.last_review_bar = int(sig.t[-1]) if sig is not None else 0
         limit = self.p.entry_order == "limit"
         o = Order(self.id, setup.symbol, "buy", "limit" if limit else "market", d.qty, "entry", pos.id,
                   limit_price=d.entry if limit else None, post_only=limit, ref_price=d.entry)
@@ -503,6 +566,8 @@ class Bot:
                 pos.partial_order_id = po.id
                 self._submit(po, now)
                 qty = qty - pq
+        if pos.close_stop:
+            return  # trend trades have no fixed target: the trailing stop decides the exit
         to = Order(self.id, pos.symbol, "sell", "limit", float(f"{qty:.8f}"), "take_profit", pos.id,
                    limit_price=pos.target)
         pos.tp_order_id = to.id
@@ -520,9 +585,14 @@ class Bot:
         tgt_pct = (pos.target / pos.entry_price - 1) * 100
         partial = f" · take 1/{round(1 / self.p.partial_pct)} at {fmt_price(pos.partial_price)}" \
             if pos.partial_price and self.p.partial_pct else ""
-        self.emit("open", f"LONG {c} @ {fmt_price(pos.entry_price)}",
-                  f"Stop {fmt_price(pos.initial_stop)} ({stop_pct:.2f}%) · Target {fmt_price(pos.target)} "
-                  f"(+{tgt_pct:.2f}%){partial} · Max loss ~ {money(risk_usd)}. Stop & target orders are set.",
+        if pos.close_stop:
+            plan = (f"Stop {fmt_price(pos.initial_stop)} ({stop_pct:.1f}%) judged on daily closes, emergency stop "
+                    f"{fmt_price(pos.hard_stop)} · No fixed target: rides the trend · Risk ~ {money(risk_usd)}.")
+        else:
+            window = f" · {pos.time_stop_bars * self.p.signal_tf // 86400}-day window" if pos.time_stop_bars else ""
+            plan = (f"Stop {fmt_price(pos.initial_stop)} ({stop_pct:.2f}%) · Target {fmt_price(pos.target)} "
+                    f"(+{tgt_pct:.2f}%){partial}{window} · Max loss ~ {money(risk_usd)}. Stop & target orders are set.")
+        self.emit("open", f"LONG {c} @ {fmt_price(pos.entry_price)}", plan,
                   pos.symbol, "action",
                   {"entry": pos.entry_price, "stop": pos.initial_stop, "target": pos.target,
                    "qty": pos.bought_qty, "strategy": STRATEGY_NAMES[pos.strategy]}, pos=pos)
@@ -746,7 +816,9 @@ class Bot:
             out.append({
                 "id": pos.id, "bot": self.id, "symbol": pos.symbol, "strategy": STRATEGY_NAMES[pos.strategy],
                 "status": pos.status, "qty": pos.qty, "entry": pos.entry_price or pos.planned_entry,
-                "price": price, "stop": pos.stop, "initial_stop": pos.initial_stop, "target": pos.target,
+                "price": price, "stop": pos.stop, "initial_stop": pos.initial_stop,
+                "target": None if pos.close_stop else pos.target, "hard_stop": pos.hard_stop or None,
+                "expires": pos.opened_ts + pos.time_stop_bars * self.p.signal_tf if pos.time_stop_bars else None,
                 "partial": pos.partial_price, "partial_done": pos.partial_done, "opened": pos.opened_ts,
                 "pnl": pnl["net"], "pnl_pct": pnl["pct"], "r": pnl["r"], "confidence": pos.confidence,
                 "headline": pos.headline, "reasons": pos.reasons, "trailing": pos.trailing, "be": pos.be_done,
@@ -767,6 +839,7 @@ class Bot:
         pf = s["gross_win"] / s["gross_loss"] if s["gross_loss"] > 0 else (None if not s["gross_win"] else 99.0)
         return {
             "id": self.id, "name": self.p.name, "label": self.p.label, "color": self.p.color,
+            "kind": self.p.kind, "generation": self.p.generation, "benchmark": self.p.benchmark,
             "tagline": self.p.tagline, "equity": eq, "cash": self.portfolio.cash, "start": self.starting_balance,
             "total_return": eq / self.starting_balance - 1, "status": self.status_text,
             "halted": self.halted, "paused": self.paused, "open": self.open_count(),
@@ -822,3 +895,57 @@ class Bot:
                 continue
             self.positions[pos.id] = pos
             self._place_exit_orders(pos, now)
+
+
+class HodlBot(Bot):
+    """Benchmark: buys BTC once at the start of the battle and never sells."""
+
+    def scan(self, now: float) -> None:
+        self.scan_count += 1
+        self._roll_day(now)
+        sym = self.p.symbols[0]
+        if not self.hub.ready(sym):
+            return
+        if not self.positions and self.portfolio.qty(sym) <= 0 and self.portfolio.cash > 50:
+            q = self.hub.quote(sym)
+            _, taker = self.venue.fee_rates(now)
+            qty = float(f"{self.portfolio.cash * 0.995 / (q.ask * (1 + taker)):.8f}")
+            pos = Position(id=f"{self.id}-{int(now)}-{sym}", bot_id=self.id, symbol=sym, strategy="hodl",
+                           headline="Buy Bitcoin and hold it forever", reasons=["The benchmark every bot must beat"],
+                           confidence=100, opened_ts=now, stop=0.0, initial_stop=0.0, target=q.ask * 100,
+                           partial_price=None, atr=0.0, planned_qty=qty, planned_entry=q.ask, net_rr=0.0,
+                           breakeven_r=99, trail_start_r=99, close_stop=True)
+            o = Order(self.id, sym, "buy", "market", qty, "entry", pos.id, ref_price=q.ask)
+            pos.entry_order_id = o.id
+            self.positions[pos.id] = pos
+            self.emit("order", f"BUY {qty_str(qty)} BTC · MARKET",
+                      f"All-in on Bitcoin with {money(qty * q.ask)}. No stops, no targets, no trading. Ever.",
+                      sym, "action", {"side": "buy", "type": "market", "qty": qty, "price": q.ask}, pos=pos)
+            self._submit(o, now)
+            return
+        self.status_text = "Holding BTC · never sells"
+        if self.scan_count % 45 == 0 and self.positions:
+            pos = next(iter(self.positions.values()))
+            if pos.qty > 0:
+                chg = self.hub.price(sym) / pos.entry_price - 1
+                mood = "Diamond hands." if chg < 0 else "Doing nothing is working."
+                self.emit("thought", "Still holding BTC",
+                          f"{chg * 100:+.2f}% since I bought at {fmt_price(pos.entry_price)}. "
+                          f"Fees paid since then: $0.00. {mood}", sym)
+
+    def _manage_position(self, pos: Position, now: float) -> None:
+        pos.hwm = max(pos.hwm, self.hub.price(pos.symbol))
+
+    def _review_position(self, *a, **k) -> None:
+        return
+
+    def _check_circuit(self, now: float) -> None:
+        return
+
+    def _activate(self, pos: Position, now: float) -> None:
+        if pos.status != "opening":
+            return
+        pos.status = "open"
+        self.emit("open", f"HODL BTC @ {fmt_price(pos.entry_price)}",
+                  "Bought and done. This is the line the trading bots need to stay above.", pos.symbol, "action",
+                  {"entry": pos.entry_price, "qty": pos.bought_qty, "strategy": "Buy & Hold"}, pos=pos)
