@@ -9,3 +9,4 @@ backend/.bt-summary.py
 frontend/node_modules/
 frontend/dist/
 .env
+*.tsbuildinfo
