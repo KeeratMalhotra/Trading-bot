@@ -288,9 +288,11 @@ def regime_at(d: Daily, on: np.ndarray, ts: np.ndarray) -> np.ndarray:
 
 
 def oracle_sleeve(d: Daily, store: HistoryStore, alt: AltData, per: float = 0.2, maxn: int = 5,
-                  side: str = "long", P: np.ndarray | None = None, panel=None, start: float = START - 30 * DAY):
+                  side: str = "long", P: np.ndarray | None = None, panel=None, start: float = 0.0):
     """Replays ORACLE trades (top-10% forecasts) on perps, marked daily.
     long: only while BTC > 200-day avg; short: only while BTC < 200-day avg.
+    Trades begin wherever out-of-sample forecasts exist (plus the 30 days the bar needs);
+    `start` can hold them back further.
     Returns (daily returns, daily average exposure)."""
     from ..ml.dataset import build_panel
     if P is None:
@@ -464,10 +466,10 @@ def stats(d, r, lo=START):
         mr.append(np.prod(1 + r[months == mm]) - 1)
     mr = np.array(mr)
     years = {}
-    for y in range(2022, 2027):
+    for y in sorted({int(mm[:4]) for mm in months}):
         k = np.array([mm.startswith(str(y)) for mm in sorted(set(months))])
         if k.any():
-            years[y] = round((np.prod(1 + mr[k]) - 1) * 100, 1)
+            years[y] = round(float(np.prod(1 + mr[k]) - 1) * 100, 1)
     return {"total_pct": round((eq[-1] - 1) * 100, 1), "max_dd_pct": round(float((1 - eq / peak).max()) * 100, 1),
             "sharpe": round(sharpe(r), 2), "months": len(mr), "up_months": int((mr > 0.0005).sum()),
             "down_months": int((mr < -0.0005).sum()), "worst_month_pct": round(float(mr.min()) * 100, 1),
@@ -542,7 +544,9 @@ def main() -> None:
     ap.add_argument("--json", default="")
     ap.add_argument("--spot-maker", type=float, default=None, help="e.g. 0.006 for a small Coinbase account")
     ap.add_argument("--spot-taker", type=float, default=None)
+    ap.add_argument("--start", default="2022-01-01", help="first day of the reported period")
     a = ap.parse_args()
+    lo = time.mktime(time.strptime(a.start, "%Y-%m-%d")) - time.timezone
     costs = CostModel() if a.spot_maker is None else CostModel.for_spot_fee(a.spot_maker, a.spot_taker or a.spot_maker * 2)
     print("cost model:", costs)
     store = HistoryStore()
@@ -554,8 +558,8 @@ def main() -> None:
     d = st.d
     rows = {**{f"strategy:{k}": v for k, v in st.lib.items()},
             **{f"agent:{k}": v for k, v in st.agents.items()}, "TEAM (QUORUM)": st.team}
-    res = {k: stats(d, v) for k, v in rows.items()}
-    print(f"built in {time.time() - t0:.0f}s · {time.strftime('%Y-%m-%d', time.gmtime(START))} .. "
+    res = {k: stats(d, v, lo=lo) for k, v in rows.items()}
+    print(f"built in {time.time() - t0:.0f}s · {time.strftime('%Y-%m-%d', time.gmtime(lo))} .. "
           f"{time.strftime('%Y-%m-%d', time.gmtime(int(d.days[-1]) * DAY))}\n")
     print(f"{'':<22}{'total':>9}{'maxDD':>8}{'Sharpe':>8}{'up/down months':>16}{'worst mo':>10}  yearly %")
     for k, v in res.items():

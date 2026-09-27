@@ -38,7 +38,12 @@ export function TopBar() {
         </svg>
         <span className="text-[13px] font-semibold tracking-[0.22em] text-hi">QUORUM</span>
         <span className="text-mute text-[11px] ml-1">{meta?.account ?? ""}</span>
-        <span className="text-[10px] tracking-wider text-soft border border-line2 rounded px-1.5 py-px">PAPER</span>
+        <span
+          className="text-[10px] tracking-wider text-soft border border-line2 rounded px-1.5 py-px"
+          title="Simulated orders on live Coinbase prices. No real money."
+        >
+          PAPER TRADING
+        </span>
       </div>
       <div className="flex items-center gap-5 text-[12px]">
         {[btc, eth].filter(Boolean).map((q) => (
@@ -64,10 +69,13 @@ export function TopBar() {
       {live && !live.engine.desk_ready && (
         <span className="text-[11px] text-[#e3b35b]">Warming up · {live.engine.forecaster}</span>
       )}
+      {live && live.engine.desk_ready && live.engine.paused && (
+        <span className="text-[11px] text-[#e3b35b]">Trading paused · waiting for live prices</span>
+      )}
       <div className="ml-auto flex items-center gap-5 text-[12px]">
         <span className="flex items-center gap-2 text-soft">
           <span className={clsx("dot", ok ? "bg-up" : "bg-down")} />
-          {ok ? "Connected · Coinbase" : "Reconnecting"}
+          {ok ? "Live prices · Coinbase" : connected ? live?.market.message || "Reconnecting to Coinbase" : "Reconnecting"}
         </span>
         <span className="num text-soft">{clock.format(now)} ET</span>
       </div>

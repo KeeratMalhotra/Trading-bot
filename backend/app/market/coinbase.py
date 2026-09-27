@@ -20,7 +20,7 @@ log = logging.getLogger("market.coinbase")
 
 REST = "https://api.exchange.coinbase.com"
 WS_URL = "wss://ws-feed.exchange.coinbase.com"
-HEADERS = {"User-Agent": "bot-battle/1.0", "Accept": "application/json"}
+HEADERS = {"User-Agent": "quorum/1.0", "Accept": "application/json"}
 
 
 def _iso(ts: float) -> str:
@@ -95,9 +95,9 @@ async def run_ticker(hub: MarketHub, stop: asyncio.Event) -> None:
                 hub.status.message = "Live market data - Coinbase"
                 backoff = 1.0
                 log.info("coinbase websocket connected")
-                async for raw in ws:
-                    if stop.is_set():
-                        break
+                while not stop.is_set():
+                    # heartbeats arrive every second: 45s of silence means a stuck stream -> reconnect
+                    raw = await asyncio.wait_for(ws.recv(), timeout=45)
                     msg = json.loads(raw)
                     if msg.get("type") != "ticker":
                         if msg.get("type") == "error":
@@ -118,7 +118,7 @@ async def run_ticker(hub: MarketHub, stop: asyncio.Event) -> None:
         except asyncio.CancelledError:
             raise
         except Exception as e:  # noqa: BLE001
-            log.warning("coinbase websocket dropped: %s", e)
+            log.warning("coinbase websocket dropped: %s", e or type(e).__name__)
         hub.status.connected = False
         hub.status.message = "Reconnecting to Coinbase..."
         await asyncio.sleep(backoff)

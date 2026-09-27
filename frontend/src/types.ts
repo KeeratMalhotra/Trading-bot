@@ -24,6 +24,11 @@ export interface Account {
   funding: number;
   netting_saved: number;
   margin: number;
+  interest?: number;
+  cash_apy?: number;
+  idle_cash?: number;
+  funding_source?: "coinbase" | "deribit" | "mixed" | null;
+  funding_hours?: number;
   tax_ytd: {
     total: number;
     federal: number;
@@ -34,6 +39,7 @@ export interface Account {
     section_1256: number;
     spot_short_term: number;
     spot_long_term: number;
+    interest?: number;
   };
   fee_tier: string;
   costs: { long_venue: string; carry_on: boolean };
@@ -102,8 +108,8 @@ export interface Live {
   regime: { btc_on: boolean | null; btc_close?: number; btc_sma200?: number; fear_greed?: number | null; day?: number };
   nova: { picks: Record<string, number>; sharpe: Record<string, number>; labels: Record<string, string> };
   quotes: { s: string; p: number; chg: number }[];
-  market: { source: string; connected: boolean };
-  engine: { forecaster: string; ready: boolean; desk_ready: boolean };
+  market: { source: string; connected: boolean; message?: string };
+  engine: { forecaster: string; ready: boolean; desk_ready: boolean; paused?: boolean };
 }
 
 export interface Event {

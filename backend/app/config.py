@@ -10,7 +10,13 @@ DATA_DIR = Path(os.getenv("DATA_DIR", Path(__file__).resolve().parents[1] / "dat
 DB_PATH = DATA_DIR / "botbattle.sqlite3"
 STATIC_DIR = Path(os.getenv("STATIC_DIR", Path(__file__).resolve().parents[2] / "frontend" / "dist"))
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")  # empty = controls open (fine on localhost)
-MARKET_SOURCE = os.getenv("MARKET_SOURCE", "auto")  # auto | coinbase | sim
+# auto / coinbase: live Coinbase prices, retrying until Coinbase answers (never swaps in fake prices)
+# sim: the offline price simulator (demos only)
+MARKET_SOURCE = os.getenv("MARKET_SOURCE", "auto")
+# Yield earned on idle cash (cash not needed as futures margin), e.g. 0.0375 for USDC rewards.
+# 0 = off. Only set it if your real account would earn it (e.g. Coinbase One + cash held as USDC).
+CASH_APY = float(os.getenv("CASH_APY", "0"))
+FEED_STALE_S = 60.0          # no Coinbase ticks for this long -> trading pauses until the feed is back
 STARTING_BALANCE = float(os.getenv("STARTING_BALANCE", "10000"))
 TEAM_BALANCE = float(os.getenv("TEAM_BALANCE", "30000"))  # QUORUM team account
 # US tax profile used for the estimates on the dashboard

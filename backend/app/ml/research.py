@@ -106,7 +106,7 @@ def report(panel, P, lo: float, hi: float, label: str) -> dict:
     res["calibration_deciles"] = cal
     years = {}
     tt = np.repeat(dt[mt], P.shape[1])[ok]
-    for y0 in range(2022, 2027):
+    for y0 in range(time.gmtime(lo).tm_year, time.gmtime(min(hi, time.time())).tm_year + 1):
         a = time.mktime((y0, 1, 1, 0, 0, 0, 0, 0, 0)) - time.timezone
         m = (tt >= a) & (tt < a + 365.25 * 86400)
         if m.sum() > 1000 and len(np.unique(yy[m])) == 2:
@@ -137,7 +137,10 @@ def main() -> None:
     ap.add_argument("--tag", default="")
     ap.add_argument("--kind", default="clf", choices=["clf", "reg"])
     ap.add_argument("--side", default="long", choices=["long", "short"])
+    ap.add_argument("--oos-start", default="2022-01-01",
+                    help="first out-of-sample day (earlier needs older history: python -m app.ml.data --since ...)")
     a = ap.parse_args()
+    oos_start = time.mktime(time.strptime(a.oos_start, "%Y-%m-%d")) - time.timezone
     store = HistoryStore()
     store.load()
     if not a.no_update:
@@ -146,11 +149,11 @@ def main() -> None:
     panel = build_panel(store, tp_mult=a.tp, sl_mult=a.sl, horizon=a.horizon, side=a.side)
     print(f"panel: {panel.X.shape} features={len(panel.names)} built in {time.time() - t0:.1f}s")
     end = float(panel.decision_time[-1] + 1)
-    P, models = walk_forward(panel, OOS_START, end, a.retrain_days, kind=a.kind)
+    P, models = walk_forward(panel, oos_start, end, a.retrain_days, kind=a.kind)
     out = DATA_DIR / "research"
     out.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(out / f"oracle_oos{a.tag}.npz", t=panel.t, P=P, symbols=np.array(panel.symbols))
-    results = {"dev": report(panel, P, OOS_START, HOLDOUT_START, "2022-01-01..2026-03-26 (development)")}
+    results = {"dev": report(panel, P, oos_start, HOLDOUT_START, f"{a.oos_start}..2026-03-26 (development)")}
     if a.holdout:
         results["holdout"] = report(panel, P, HOLDOUT_START, end, "2026-03-26..now (HOLDOUT)")
     results["label"] = {"tp": a.tp, "sl": a.sl, "horizon_h": a.horizon, "kind": a.kind}

@@ -287,7 +287,11 @@ function Costs() {
     ["  Spot", usd(-a.fees.spot, { sign: true })],
     ["  Futures", usd(-a.fees.perp, { sign: true })],
     ["Funding", usd(-a.funding, { sign: true }), a.funding <= 0 ? "text-up" : "text-down"],
+    ["Funding rates", a.funding_source === "deribit" || !a.funding_hours ? "Deribit (proxy)" : `Coinbase · ${a.funding_hours}h recorded`],
     ["Saved by internal netting", usd(a.netting_saved, { sign: true }), "text-up"],
+    ...(a.cash_apy || a.interest
+      ? ([[`Interest on idle cash${a.cash_apy ? ` · ${(a.cash_apy * 100).toFixed(2)}%` : ""}`, usd(a.interest ?? 0, { sign: true }), "text-up"]] as [string, string, string][])
+      : []),
     ["Spot fee tier", a.fee_tier],
     ["Directional longs via", a.costs.long_venue === "perp" ? "Perpetual-style futures" : "Spot"],
   ];
@@ -295,6 +299,7 @@ function Costs() {
     ["Short-term gains", usd(t.spot_short_term, { sign: true })],
     ["Long-term gains", usd(t.spot_long_term, { sign: true })],
     ["Section 1256 (60/40)", usd(t.section_1256, { sign: true })],
+    ...(t.interest ? ([["Interest (ordinary income)", usd(t.interest, { sign: true })]] as [string, string][]) : []),
     ["Federal", usd(t.federal)],
     ["State", usd(t.state)],
     ["NIIT", usd(t.niit)],
