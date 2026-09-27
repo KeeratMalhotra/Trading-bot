@@ -19,7 +19,8 @@ CASH_APY = float(os.getenv("CASH_APY", "0"))
 # Dashboard "what if" line: the same starting amount with this share held in BTC instead
 # (bought once at the start). Display only, it never affects trading. 0 = hide it.
 MIX_BTC_SHARE = min(max(float(os.getenv("MIX_BTC_SHARE", "0.4")), 0.0), 1.0)
-MIX_REBALANCE = os.getenv("MIX_REBALANCE", "yearly")   # yearly (back to the split every Jan 1) | never
+# how often it goes back to the split: never | monthly | quarterly | 6m | yearly | 2y, or a number of months
+MIX_REBALANCE = os.getenv("MIX_REBALANCE", "yearly")
 FEED_STALE_S = 60.0          # no Coinbase ticks for this long -> trading pauses until the feed is back
 STARTING_BALANCE = float(os.getenv("STARTING_BALANCE", "10000"))
 TEAM_BALANCE = float(os.getenv("TEAM_BALANCE", "30000"))  # QUORUM team account

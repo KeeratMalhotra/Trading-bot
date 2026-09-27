@@ -108,9 +108,10 @@ class Quorum:
         self.clock = clock
         self.balance = balance
         from ..config import CASH_APY, MIX_BTC_SHARE, MIX_REBALANCE, TAX_FILING_STATUS, TAX_OTHER_INCOME, TAX_STATE
+        from .mixbacktest import rebalance_months
         self.cash_apy = CASH_APY if cash_apy is None else cash_apy
         self.mix_share = MIX_BTC_SHARE
-        self.mix_rebalance = "never" if MIX_REBALANCE == "never" else "yearly"
+        self.mix_months = rebalance_months(MIX_REBALANCE)
         self.tax = TaxSettings(TAX_FILING_STATUS, TAX_OTHER_INCOME, TAX_STATE)
         self.reset(balance)
 
@@ -220,22 +221,28 @@ class Quorum:
             self.book.credit_interest(idle * self.cash_apy * (now - last) / (365 * DAY), now)
 
     # ============================================================ what-if: part of the money in BTC
+    def _mix_period(self, ts: float) -> int:
+        from .mixbacktest import period
+        dt = datetime.fromtimestamp(ts, ET)
+        return period(dt.year, dt.month, self.mix_months)
+
     def init_mix(self, btc0: float, t0: float) -> None:
         """At the account's start, split the deposit: (1-s) stays in the account, s buys BTC (one spot fee)."""
         s, dep = self.mix_share, self.book.deposits
-        self.mix = {"q": 1 - s, "b": s * dep * (1 - MIX_FEE) / btc0, "year": datetime.fromtimestamp(t0, ET).year,
+        self.mix = {"q": 1 - s, "b": s * dep * (1 - MIX_FEE) / btc0, "period": self._mix_period(t0),
                     "t0": t0, "btc0": btc0}
 
     def mix_at(self, now: float, eq: float, btc: float) -> float:
-        """Value of the what-if portfolio; with MIX_REBALANCE=yearly it goes back to the split each Jan 1 (ET),
-        paying the spot fee on the BTC it buys or sells."""
+        """Value of the what-if portfolio. Every MIX_REBALANCE months (calendar periods in New York time:
+        6 = Jan 1 and Jul 1) it goes back to the split, paying the spot fee on the BTC it buys or sells."""
         m = self.mix
-        y = datetime.fromtimestamp(now, ET).year
-        if self.mix_rebalance == "yearly" and y != m["year"] and eq > 0:
+        p = self._mix_period(now)
+        m.setdefault("period", p)
+        if self.mix_months and p != m["period"] and eq > 0:
             v = m["q"] * eq + m["b"] * btc
             v -= abs(self.mix_share * v - m["b"] * btc) * MIX_FEE
             m.update(q=(1 - self.mix_share) * v / eq, b=self.mix_share * v / btc)
-        m["year"] = y
+        m["period"] = p
         return m["q"] * eq + m["b"] * btc
 
     def _day_ready(self, day: int, now: float) -> bool:
@@ -758,7 +765,7 @@ class Quorum:
                         "interest": self.book.interest_total, "cash_apy": self.cash_apy,
                         "mix": None if self.mix_value is None else {
                             "value": self.mix_value, "ret": self.mix_value / self.book.deposits - 1,
-                            "btc_share": self.mix_share, "rebalance": self.mix_rebalance},
+                            "btc_share": self.mix_share, "rebalance_months": self.mix_months},
                         "idle_cash": self.book.idle_cash(px),
                         "funding_source": self.funding_src,
                         "funding_hours": int(len(self.alt.cb.get("BTC-USD", ()))) if self.alt is not None else 0,

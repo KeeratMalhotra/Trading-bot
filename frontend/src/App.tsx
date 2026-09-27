@@ -5,6 +5,7 @@ import { AccountStrip } from "./components/AccountStrip";
 import { Agents } from "./components/Agents";
 import { PerformanceChart } from "./components/PerformanceChart";
 import { PriceChart } from "./components/PriceChart";
+import { BacktestChart } from "./components/BacktestChart";
 import { Positions } from "./components/Positions";
 import { Log } from "./components/Log";
 import { Side } from "./components/Side";
@@ -67,9 +68,9 @@ function ChartCard() {
     <section className="card flex flex-col min-h-0">
       <div className="flex items-center gap-3 px-3 h-9 border-b border-line shrink-0">
         <div className="flex gap-0.5">
-          {(["performance", "chart"] as const).map((v) => (
+          {(["performance", "chart", "backtest"] as const).map((v) => (
             <button key={v} onClick={() => set({ view: v })} className={clsx("text-[11px] px-2 py-0.5 rounded", view === v ? "bg-line2 text-hi" : "text-mute hover:text-soft")}>
-              {v === "performance" ? "Performance" : "Market"}
+              {v === "performance" ? "Performance" : v === "chart" ? "Market" : "Backtest"}
             </button>
           ))}
         </div>
@@ -113,6 +114,9 @@ function ChartCard() {
         </div>
         <div className={clsx("absolute inset-0", view !== "chart" && "invisible")}>
           <PriceChart symbol={symbol} tf={tf} />
+        </div>
+        <div className={clsx("absolute inset-0", view !== "backtest" && "invisible")}>
+          <BacktestChart />
         </div>
       </div>
     </section>

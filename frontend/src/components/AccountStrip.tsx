@@ -59,8 +59,7 @@ function MixCell({ mix, equity, deposits }: { mix: NonNullable<Account["mix"]>; 
       className="bg-panel px-5 py-4 min-w-0"
       title={
         `What the account would be worth if ${share}% of the starting ${usd(deposits, { whole: true })} had bought BTC ` +
-        `instead (one spot fee)${mix.rebalance === "yearly" ? `, rebalanced back to ${100 - share}/${share} every Jan 1` : ", never rebalanced"}. ` +
-        "Display only: it doesn't affect trading."
+        `instead (one spot fee), ${rebalanceText(mix.rebalance_months, share)}. Display only: it doesn't affect trading.`
       }
     >
       <div className="label mb-2.5">
@@ -77,6 +76,14 @@ function MixCell({ mix, equity, deposits }: { mix: NonNullable<Account["mix"]>; 
       </div>
     </div>
   );
+}
+
+function rebalanceText(months: number, share: number): string {
+  const back = `rebalanced back to ${100 - share}/${share}`;
+  if (!months) return "never rebalanced";
+  if (months === 12) return `${back} every Jan 1`;
+  if (months === 6) return `${back} every Jan 1 and Jul 1`;
+  return `${back} every ${months} month${months === 1 ? "" : "s"}`;
 }
 
 function Spark({ pts, up }: { pts: [number, number][]; up: boolean }) {

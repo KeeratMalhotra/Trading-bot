@@ -105,12 +105,13 @@ Prices are always live Coinbase prices. If Coinbase can't be reached at startup,
 | `CASH_APY` | `0` | Yield on idle cash (cash not needed as futures margin), e.g. `0.0375`. Only set it if your real account would earn it (e.g. Coinbase One with idle cash held as USDC). It's shown on the dashboard and counted as ordinary income in the tax estimate |
 | `MARKET_SOURCE` | `auto` | `auto`/`coinbase` = live Coinbase prices; `sim` = offline simulator for demos |
 | `MIX_BTC_SHARE` | `0.4` | Dashboard what-if: the share of the starting amount held in BTC instead (bought once, 0.6% fee). `0` hides it. Display only |
-| `MIX_REBALANCE` | `yearly` | `yearly` = back to the split every Jan 1 (0.6% fee on the BTC traded); `never` = buy and hold |
+| `MIX_REBALANCE` | `yearly` | How often it goes back to the split (0.6% fee on the BTC traded): `yearly` (every Jan 1), `6m` (Jan 1 and Jul 1), `quarterly`, `monthly`, `2y`, any number of months, or `never` (buy and hold). Applies to the live box and the Backtest tab |
 
 ## Dashboard
 
 - **Account:** net liquidation value, month-to-date and today's P&L, since-inception return, and margin in use.
 - **What if (60% QUORUM + 40% BTC):** what the same starting amount would be worth with 40% held in BTC instead, shown as a box with a mini chart and as a gold line on the performance chart. It's display only and never affects trading. Set the split with `MIX_BTC_SHARE`, and `MIX_REBALANCE` for rebalancing.
+- **Backtest tab:** $100k from Jan 2017 in BTC alone vs the same QUORUM + BTC split, on a log scale, with how each did during BTC's two big crashes. It's clearly labelled as a hypothetical backtest. For OBS, `http://localhost:8000/?view=backtest` opens straight on this tab.
 - **Desk:** each agent's current activity, allocation, capital, % invested, and P&L today, this month and since start. Click an agent to filter the activity log.
 - **Performance:** account vs BTC buy & hold. **Market:** candles with the team's fills, average prices and ORACLE's stops and targets.
 - **Positions:** spot and futures, contracts, average price, mark, unrealized P&L and funding, each position's exit plan, and which agents hold it.
@@ -149,7 +150,20 @@ python -m app.ml.research --kind reg --tp 4 --sl 2 --horizon 336 --retrain-days 
 python -m app.ml.research --kind reg --side short --tp 4 --sl 2 --horizon 336 --retrain-days 60 --tag _Sr --oos-start 2016-09-01
 python -m app.team.research --spot-maker 0.006 --spot-taker 0.012 --start 2017-01-01
 python -m app.team.replay --start 2017-01-01 --end 2022-01-01 --balance 30000
+python -m app.team.mixbacktest build --start 2017-01-01   # refresh the Backtest tab's data (app/team/backtest_mix.json)
+python -m app.team.mixbacktest grid                       # every BTC share x rebalancing period from that file
 ```
+
+**QUORUM + BTC, $100k from Jan 2017** (hypothetical, from `mixbacktest grid`; BTC alone ended at $8.62M, worst drop 84%, 4 losing years):
+
+| Split, rebalanced yearly | Final | Beats BTC | Losing years | 2018 | 2022 | Worst drop |
+|---|---|---|---|---|---|---|
+| 90% QUORUM / 10% BTC | $4.37M | no | 0 | +1% | +24% | 47% |
+| 70% QUORUM / 30% BTC | $7.89M | no | 1 | −15% | +5% | 52% |
+| **60% QUORUM / 40% BTC** | **$9.70M** | yes | 2 | −24% | −5% | 54% |
+| 50% QUORUM / 50% BTC | $11.30M | yes | 3 | −32% | −15% | 56% |
+
+No split beat BTC without losing years: beating BTC took at least 40% in BTC, and that much BTC lost money in 2018. Beating BTC is also fragile. With 60/40, only 2 of the 12 possible yearly rebalancing months beat BTC; Jan 1 happens to be one of them. From other start months between 2017 and 2024, 60/40 beat BTC about half the time. Rebalancing every 6 months did worse than yearly for every split.
 
 ## Going live (not built yet)
 

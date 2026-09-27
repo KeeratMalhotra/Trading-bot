@@ -331,6 +331,13 @@ def health():
             "positions": len(S.q.book.perps)}
 
 
+@app.get("/api/backtest")
+def api_backtest():
+    """Hypothetical long backtest for the Backtest tab: BTC held alone vs the what-if split (MIX_* settings)."""
+    from .team.mixbacktest import dashboard
+    return Response(dumps(dashboard(S.q.mix_share, S.q.mix_months)), media_type="application/json")
+
+
 @app.get("/api/snapshot")
 def api_snapshot():
     return Response(dumps(snapshot(time.time())), media_type="application/json")
