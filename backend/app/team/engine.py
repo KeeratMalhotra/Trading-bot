@@ -54,6 +54,7 @@ STRAT_LABEL = {"btc_regime": "BTC trend", "trend": "BTC/ETH trend", "rotation": 
                "oracle_short": "ORACLE shorts"}
 ORACLE_SIZE = 0.20
 ORACLE_MAX = 5               # per side
+MIX_FEE = 0.006              # spot fee the what-if portfolio pays when it buys/sells BTC (small-account maker)
 DAILY_BAND = 0.05            # daily rebalance: fix drift above 5% of the target
 MIN_TRADE_USD = 20.0
 _ids = itertools.count(1)
@@ -106,8 +107,10 @@ class Quorum:
         self.fixed_costs = costs
         self.clock = clock
         self.balance = balance
-        from ..config import CASH_APY, TAX_FILING_STATUS, TAX_OTHER_INCOME, TAX_STATE
+        from ..config import CASH_APY, MIX_BTC_SHARE, MIX_REBALANCE, TAX_FILING_STATUS, TAX_OTHER_INCOME, TAX_STATE
         self.cash_apy = CASH_APY if cash_apy is None else cash_apy
+        self.mix_share = MIX_BTC_SHARE
+        self.mix_rebalance = "never" if MIX_REBALANCE == "never" else "yearly"
         self.tax = TaxSettings(TAX_FILING_STATUS, TAX_OTHER_INCOME, TAX_STATE)
         self.reset(balance)
 
@@ -149,6 +152,8 @@ class Quorum:
         self._last_scale = 1.0
         self.netting_saved = 0.0
         self.last_interest_ts: float | None = None
+        self.mix: dict | None = None               # what-if portfolio: {"q": share of the account, "b": BTC units, ...}
+        self.mix_value: float | None = None
         self.funding_src: str | None = None       # coinbase | deribit | mixed (last hour charged)
         self._veto_noted: dict[str, float] = {}   # key -> veto end already announced
 
@@ -197,6 +202,10 @@ class Quorum:
             if bar and bar > self.last_hour_bar:
                 self.on_hour(bar, now)
         self._live_barriers(px, now)
+        if self.mix_share > 0 and px.get("BTC-USD"):
+            if self.mix is None:
+                self.init_mix(px["BTC-USD"], now)
+            self.mix_value = self.mix_at(now, self.book.equity(px), px["BTC-USD"])
         if now - self.last_sample >= (900 if self.desk_source is None else 3600):
             self.last_sample = now
             self._sample(now, px)
@@ -209,6 +218,25 @@ class Quorum:
         idle = self.book.idle_cash(px)
         if idle > 0:     # cash keeps earning while the app is paused or down, like a real balance would
             self.book.credit_interest(idle * self.cash_apy * (now - last) / (365 * DAY), now)
+
+    # ============================================================ what-if: part of the money in BTC
+    def init_mix(self, btc0: float, t0: float) -> None:
+        """At the account's start, split the deposit: (1-s) stays in the account, s buys BTC (one spot fee)."""
+        s, dep = self.mix_share, self.book.deposits
+        self.mix = {"q": 1 - s, "b": s * dep * (1 - MIX_FEE) / btc0, "year": datetime.fromtimestamp(t0, ET).year,
+                    "t0": t0, "btc0": btc0}
+
+    def mix_at(self, now: float, eq: float, btc: float) -> float:
+        """Value of the what-if portfolio; with MIX_REBALANCE=yearly it goes back to the split each Jan 1 (ET),
+        paying the spot fee on the BTC it buys or sells."""
+        m = self.mix
+        y = datetime.fromtimestamp(now, ET).year
+        if self.mix_rebalance == "yearly" and y != m["year"] and eq > 0:
+            v = m["q"] * eq + m["b"] * btc
+            v -= abs(self.mix_share * v - m["b"] * btc) * MIX_FEE
+            m.update(q=(1 - self.mix_share) * v / eq, b=self.mix_share * v / btc)
+        m["year"] = y
+        return m["q"] * eq + m["b"] * btc
 
     def _day_ready(self, day: int, now: float) -> bool:
         if self.desk_source is not None:
@@ -687,7 +715,8 @@ class Quorum:
         self.equity_hist.append(row)
         if self.db is not None:
             self.db.add_equity([("team", now, eq), ("BTC", now, px.get("BTC-USD", 0.0))]
-                               + [(a, now, self.agent_pnl[a]["all"]) for a in AGENTS])
+                               + [(a, now, self.agent_pnl[a]["all"]) for a in AGENTS]
+                               + ([("mix", now, self.mix_value)] if self.mix_value is not None else []))
 
     def drain(self) -> list[dict]:
         out, self.outbox = self.outbox, []
@@ -727,6 +756,9 @@ class Quorum:
                         "exposure": exp, "fees": self.book.fees, "funding": self.book.funding_total,
                         "netting_saved": self.netting_saved, "margin": MARGIN * self.book.perp_gross(px),
                         "interest": self.book.interest_total, "cash_apy": self.cash_apy,
+                        "mix": None if self.mix_value is None else {
+                            "value": self.mix_value, "ret": self.mix_value / self.book.deposits - 1,
+                            "btc_share": self.mix_share, "rebalance": self.mix_rebalance},
                         "idle_cash": self.book.idle_cash(px),
                         "funding_source": self.funding_src,
                         "funding_hours": int(len(self.alt.cb.get("BTC-USD", ()))) if self.alt is not None else 0,
@@ -777,7 +809,7 @@ class Quorum:
                 "carry_row": getattr(self, "_carry_row", {}), "nova_base": getattr(self, "_nova_base", {}),
                 "nova_oracle": getattr(self, "_nova_oracle", {}), "fills": list(self.fills)[:150],
                 "last_intent": self._last_intent, "prev_want": self._prev_want, "netting_saved": self.netting_saved,
-                "last_interest_ts": self.last_interest_ts, "funding_src": self.funding_src,
+                "last_interest_ts": self.last_interest_ts, "funding_src": self.funding_src, "mix": self.mix,
                 "veto_noted": self._veto_noted,
                 "tax": self.tax.to_json(), "balance": self.balance}
 
@@ -811,6 +843,7 @@ class Quorum:
         self.netting_saved = d.get("netting_saved", 0.0)
         self.last_interest_ts = d.get("last_interest_ts")
         self.funding_src = d.get("funding_src")
+        self.mix = d.get("mix")
         self._veto_noted = d.get("veto_noted", {})
         t = d.get("tax")
         if t:

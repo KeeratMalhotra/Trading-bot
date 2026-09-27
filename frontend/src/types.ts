@@ -27,6 +27,7 @@ export interface Account {
   interest?: number;
   cash_apy?: number;
   idle_cash?: number;
+  mix?: { value: number; ret: number; btc_share: number; rebalance: "yearly" | "never" } | null;
   funding_source?: "coinbase" | "deribit" | "mixed" | null;
   funding_hours?: number;
   tax_ytd: {
@@ -142,6 +143,7 @@ export interface History {
   equity: [number, number][];
   btc: [number, number][];
   agents: Record<string, [number, number][]>;
+  mix?: [number, number][];
   day_pnl: Record<string, number>;
   months: Record<string, { pnl: number; ret: number }>;
 }

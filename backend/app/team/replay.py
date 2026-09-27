@@ -107,6 +107,7 @@ def run(start: float, end: float, balance: float, spot_maker: float = 0.006, spo
            "trades": len(q.fills), "oracle_trades": len(q.oracle_closed), "fees": q.book.fees,
            "funding": round(q.book.funding_total, 2), "interest": round(q.book.interest_total, 2),
            "final_equity": round(q.equity(), 2),
+           "mix_final": None if q.mix_value is None else round(q.mix_value, 2),
            "agents_pnl": {a: round(q.agent_pnl[a]["all"], 2) for a in AGENTS}}
     if verbose:
         f = lambda ts: datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d")  # noqa: E731
@@ -118,6 +119,9 @@ def run(start: float, end: float, balance: float, spot_maker: float = 0.006, spo
         print(f"  fills {out['trades']} (last 300 kept) · ORACLE trades {out['oracle_trades']} · fees {out['fees']} · "
               f"funding {out['funding']} · interest {out['interest']} · final equity {out['final_equity']:,.0f} · "
               f"agents {out['agents_pnl']}")
+        if out["mix_final"] is not None:
+            print(f"  what-if {(1 - q.mix_share) * 100:.0f}% QUORUM + {q.mix_share * 100:.0f}% BTC "
+                  f"({q.mix_rebalance} rebalance): final value {out['mix_final']:,.0f}")
     return out
 
 

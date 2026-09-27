@@ -36,7 +36,7 @@ export default function App() {
       <TopBar />
       <main className="flex-1 min-h-0 flex flex-col gap-3 p-3">
         <AccountStrip />
-        <div className="flex-1 min-h-0 grid grid-cols-[minmax(0,1fr)_380px] gap-3">
+        <div className="flex-1 min-h-0 grid grid-cols-[minmax(0,1fr)_340px] gap-3">
           <div className="min-h-0 flex flex-col gap-3">
             <Agents />
             <div className="flex-1 min-h-0 grid grid-rows-[minmax(220px,1.05fr)_minmax(180px,1fr)] gap-3">
@@ -44,7 +44,7 @@ export default function App() {
               <Positions />
             </div>
           </div>
-          <div className="min-h-0 grid grid-rows-[minmax(0,1.15fr)_minmax(0,1fr)] gap-3">
+          <div className="min-h-0 min-w-0 grid grid-rows-[minmax(0,1.15fr)_minmax(0,1fr)] gap-3">
             <Log />
             <Side />
           </div>
