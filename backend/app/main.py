@@ -22,7 +22,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .accounting.tax import STATE_RATES
-from .config import ADMIN_TOKEN, DATA_DIR, DB_PATH, MARKET_SOURCE, STATIC_DIR, SYMBOLS, TEAM_BALANCE, TIMEFRAMES
+from .config import (ADMIN_TOKEN, DATA_DIR, DB_PATH, FEED_STALE_S, MARKET_SOURCE, STATIC_DIR, SYMBOLS, TEAM_BALANCE,
+                     TIMEFRAMES)
 from .market import coinbase, simulated
 from .market.hub import MarketHub
 from .ml.altdata import AltData
@@ -30,6 +31,7 @@ from .ml.data import HistoryStore
 from .storage import Store
 from .team.engine import AGENT_INFO, AGENTS, Quorum
 from .team.forecaster import LiveForecaster
+from .team.funding import CoinbaseFunding
 from .team.news import NewsDesk
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -61,38 +63,73 @@ class S:
     alt: AltData
     fc: LiveForecaster
     news: NewsDesk
+    cbf: CoinbaseFunding
     q: Quorum
     clients: dict
     stop: asyncio.Event
     tasks: list
+    feed_seen: bool = False
+    feed_down_since: float = 0.0
 
 
-async def _start_market(hub: MarketHub) -> None:
-    if MARKET_SOURCE != "sim":
+async def market_boot() -> None:
+    """Coinbase candle history, then the live ticker. Retries until Coinbase answers and never swaps
+    in simulated prices (they would end up in the paper account). MARKET_SOURCE=sim is for demos only."""
+    hub = S.hub
+    if MARKET_SOURCE == "sim":
+        log.warning("MARKET_SOURCE=sim: using SIMULATED market data")
+        simulated.seed_history(hub, time.time())
+        S.tasks.append(asyncio.create_task(simulated.run_sim(hub, S.stop)))
+        return
+    delay = 5.0
+    while not S.stop.is_set():
         try:
             await asyncio.wait_for(coinbase.load_history(hub), timeout=120)
-            S.tasks.append(asyncio.create_task(coinbase.run_ticker(hub, S.stop)))
-            S.tasks.append(asyncio.create_task(coinbase.resync_loop(hub, S.stop)))
-            return
+            break
         except Exception as e:  # noqa: BLE001
-            log.warning("Coinbase history failed (%s)", e)
-            if MARKET_SOURCE == "coinbase":
-                raise
-    log.warning("Using SIMULATED market data")
-    simulated.seed_history(hub, time.time())
-    S.tasks.append(asyncio.create_task(simulated.run_sim(hub, S.stop)))
+            hub.status.message = "Waiting for Coinbase market data"
+            log.warning("Coinbase history failed (%s); retrying in %.0fs", e, delay)
+            with suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(S.stop.wait(), timeout=delay)
+            delay = min(delay * 2, 120)
+    if not S.stop.is_set():
+        S.tasks.append(asyncio.create_task(coinbase.run_ticker(hub, S.stop)))
+        S.tasks.append(asyncio.create_task(coinbase.resync_loop(hub, S.stop)))
 
 
 def prices() -> dict:
     return {s: (q.bid, q.ask, q.price) for s, q in S.hub.quotes.items() if q.price > 0}
 
 
+def feed_ok() -> bool:
+    st = S.hub.status
+    return st.connected and time.time() - st.last_msg < FEED_STALE_S
+
+
 # ------------------------------------------------------------------ loops
+def _feed_guard() -> bool:
+    """Trade only on live prices. If Coinbase goes quiet, pause (and say so) until it's back."""
+    ok = feed_ok()
+    if ok:
+        if S.feed_down_since:
+            mins = (time.time() - S.feed_down_since) / 60
+            S.q.emit("system", "DESK", "Market data restored",
+                     f"Live Coinbase prices are back after {mins:.0f} min. Trading resumed.", "good")
+            S.feed_down_since = 0.0
+        S.feed_seen = True
+    elif S.feed_seen and not S.feed_down_since:
+        S.feed_down_since = time.time()
+        S.q.emit("system", "DESK", "Market data interrupted",
+                 "No live prices from Coinbase, so trading is paused. Positions are left as they are.", "warn")
+    return ok
+
+
 async def engine_loop() -> None:
     last_save = 0.0
     while not S.stop.is_set():
         try:
-            S.q.step(time.time())
+            if _feed_guard():
+                S.q.step(time.time())
             evs = S.q.drain()
             if evs:
                 S.store.add_events(evs)
@@ -183,9 +220,11 @@ def live_payload(now: float) -> dict:
     d = S.q.summary(now)
     d["quotes"] = [{"s": s, "p": q.price, "chg": (q.price / q.open_24h - 1) if q.open_24h else 0}
                    for s, q in S.hub.quotes.items() if q.price > 0]
-    d["market"] = {"source": S.hub.status.source, "connected": S.hub.status.connected}
+    d["market"] = {"source": S.hub.status.source, "connected": S.hub.status.connected,
+                   "message": S.hub.status.message}
     d["engine"] = {"forecaster": S.fc.status_text(), "ready": S.fc.ready,
-                   "desk_ready": S.q.pending_desk is not None or S.q.last_day > 0}
+                   "desk_ready": S.q.pending_desk is not None or S.q.last_day > 0,
+                   "paused": not feed_ok()}
     return d
 
 
@@ -232,11 +271,12 @@ async def lifespan(app: FastAPI):
     S.pending_events = []
     S.store = Store(DB_PATH)
     S.hub = MarketHub(SYMBOLS)
-    await _start_market(S.hub)
     S.history = HistoryStore(DATA_DIR / "history")
     S.alt = AltData(DATA_DIR / "altdata")
+    S.alt.load()
     S.fc = LiveForecaster(S.history, S.alt, DATA_DIR)
     S.news = NewsDesk()
+    S.cbf = CoinbaseFunding(S.alt, SYMBOLS)
     S.q = Quorum(SYMBOLS, TEAM_BALANCE, prices, None, S.fc, S.news, S.store, S.history, S.alt)
     saved = S.store.kv_get("quorum")
     if saved:
@@ -245,7 +285,8 @@ async def lifespan(app: FastAPI):
     else:
         S.q.emit("system", "DESK", "Account opened", f"QUORUM starts with {TEAM_BALANCE:,.0f} USD. "
                  "Loading market history and training forecast models before the first trade.")
-    for coro in (S.fc.run(S.stop), S.news.run(S.stop), engine_loop(), desk_loop(), news_bridge(), broadcast_loop()):
+    for coro in (market_boot(), S.fc.run(S.stop), S.news.run(S.stop), S.cbf.run(S.stop), engine_loop(), desk_loop(),
+                 news_bridge(), broadcast_loop()):
         S.tasks.append(asyncio.create_task(coro))
     yield
     S.stop.set()
@@ -266,7 +307,10 @@ def require_admin(token: str | None) -> None:
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "market": S.hub.status.__dict__, "forecaster": S.fc.status_text()}
+    return {"ok": True, "market": S.hub.status.__dict__, "feed_ok": feed_ok(), "forecaster": S.fc.status_text(),
+            "desk_ready": S.q.pending_desk is not None or S.q.last_day > 0, "news": S.news.status,
+            "coinbase_funding": S.cbf.to_json(), "equity": S.q.equity(),
+            "positions": len(S.q.book.perps)}
 
 
 @app.get("/api/snapshot")

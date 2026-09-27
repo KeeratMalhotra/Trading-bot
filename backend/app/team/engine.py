@@ -30,8 +30,8 @@ import numpy as np
 
 from ..accounting.tax import TaxSettings
 from ..execution.fees import FeeTracker
-from .book import (CONTRACT, MARGIN, PERP_FEE, PERP_ID, PERP_SLIP, PERP_SLIP_ALT, STOP_SLIP, STOP_SLIP_ALT, Book,
-                   perp_name)
+from .book import (CONTRACT, MARGIN, PERP_FEE, PERP_SLIP, PERP_SLIP_ALT, STOP_SLIP, STOP_SLIP_ALT, Book, perp_name,
+                   perp_product)
 from .research import NOVA_UNIVERSE, CostModel, DeskState, compute_all
 
 log = logging.getLogger("team.engine")
@@ -90,8 +90,10 @@ def usd(x: float, sign: bool = False) -> str:
 
 class Quorum:
     def __init__(self, symbols: list[str], balance: float, prices, bars, forecaster, news=None, db=None,
-                 store=None, alt=None, desk_source=None, costs: CostModel | None = None, clock=time.time):
-        """prices(): dict symbol -> (bid, ask, last). bars(symbol, bar_t) -> (o,h,l,c) or None."""
+                 store=None, alt=None, desk_source=None, costs: CostModel | None = None, clock=time.time,
+                 cash_apy: float | None = None):
+        """prices(): dict symbol -> (bid, ask, last). bars(symbol, bar_t) -> (o,h,l,c) or None.
+        cash_apy: yield on idle cash (None = CASH_APY from the environment)."""
         self.symbols = symbols
         self.prices_fn = prices
         self.bars = bars
@@ -104,7 +106,8 @@ class Quorum:
         self.fixed_costs = costs
         self.clock = clock
         self.balance = balance
-        from ..config import TAX_FILING_STATUS, TAX_OTHER_INCOME, TAX_STATE
+        from ..config import CASH_APY, TAX_FILING_STATUS, TAX_OTHER_INCOME, TAX_STATE
+        self.cash_apy = CASH_APY if cash_apy is None else cash_apy
         self.tax = TaxSettings(TAX_FILING_STATUS, TAX_OTHER_INCOME, TAX_STATE)
         self.reset(balance)
 
@@ -145,6 +148,9 @@ class Quorum:
         self.pending_desk: DeskState | None = None
         self._last_scale = 1.0
         self.netting_saved = 0.0
+        self.last_interest_ts: float | None = None
+        self.funding_src: str | None = None       # coinbase | deribit | mixed (last hour charged)
+        self._veto_noted: dict[str, float] = {}   # key -> veto end already announced
 
     # ============================================================ helpers
     def px(self) -> dict[str, float]:
@@ -181,6 +187,7 @@ class Quorum:
         if not px:
             return
         self._attribute_marks(px)
+        self._accrue_interest(now, px)
         self._period_marks(now)
         day = int(now // DAY) - 1                     # most recent COMPLETED UTC day
         if day > self.last_day and self._day_ready(day, now):
@@ -193,6 +200,15 @@ class Quorum:
         if now - self.last_sample >= (900 if self.desk_source is None else 3600):
             self.last_sample = now
             self._sample(now, px)
+
+    def _accrue_interest(self, now: float, px: dict[str, float]) -> None:
+        """Yield on cash that isn't needed as futures margin (off unless cash_apy > 0)."""
+        last, self.last_interest_ts = self.last_interest_ts, now
+        if self.cash_apy <= 0 or last is None or now <= last:
+            return
+        idle = self.book.idle_cash(px)
+        if idle > 0:     # cash keeps earning while the app is paused or down, like a real balance would
+            self.book.credit_interest(idle * self.cash_apy * (now - last) / (365 * DAY), now)
 
     def _day_ready(self, day: int, now: float) -> bool:
         if self.desk_source is not None:
@@ -358,7 +374,7 @@ class Quorum:
             f = self.fc.forecast(s, bar)
             if not f or f.get(side) is None or s in held:
                 continue
-            if f[side] >= thr and math.isfinite(thr) and np.isfinite(f["dvol"]):
+            if f[side] >= thr and math.isfinite(thr) and np.isfinite(f["dvol"]) and 0 < f["dvol"] < 0.4:
                 cands.append((f[side], s, f))
         cands.sort(reverse=True)
         opened_before = len(self.oracle_trades)
@@ -367,17 +383,27 @@ class Quorum:
             if sum(1 for t in self.oracle_trades if t["side"] == side) >= ORACLE_MAX:
                 break
             if side == "long" and self.news and self.news.blocked(s, now):
-                self.emit("news", "ORACLE", f"Skipped {coin(s)} long", "The news desk has a negative-headline veto on it.",
-                          "warn", s)
+                until = self.news.blocked_until(s, now)
+                if self._veto_noted.get(f"oracle:{s}") != until:     # once per veto, not every hour
+                    self._veto_noted[f"oracle:{s}"] = until
+                    self.emit("news", "ORACLE", f"Skipped {coin(s)} long",
+                              f"The news desk has a negative-headline veto on it until "
+                              f"{datetime.fromtimestamp(until, ET).strftime('%a %H:%M')} ET.", "warn", s)
                 continue
             p = px.get(s)
             if not p:
                 continue
             dv = f["dvol"]
             sg = 1 if side == "long" else -1
+            if side == "long":
+                stop, target = p * (1 - 2 * dv), p * (1 + 4 * dv)
+            else:
+                # the short model was trained on these levels (mirrored prices: stop at entry/(1-2v),
+                # target at entry/(1+4v)), so trade exactly what it forecast
+                stop, target = p / (1 - 2 * dv), p / (1 + 4 * dv)
             nova_share = getattr(self, "_nova_oracle", {}).get(f"oracle_{side}", 0.0)
             tr = {"id": f"orc-{bar}-{coin(s)}", "symbol": s, "side": side, "weight": ORACLE_SIZE, "entry": p,
-                  "stop": p * (1 - sg * 2 * dv), "target": p * (1 + sg * 4 * dv), "opened": now,
+                  "stop": stop, "target": target, "opened": now,
                   "expires": bar + 3600 + 336 * 3600, "forecast": pred, "thr": thr, "reasons": f.get("reasons", []),
                   # fixed size for the life of the trade (no hourly resizing)
                   "qty": sg * ORACLE_SIZE * eq * self.desk_w["ORACLE"] / p,
@@ -523,7 +549,14 @@ class Quorum:
                 cur = self._cur_qty(k)
                 hedged = venue == "spot" and want.get(f"perp:{s}", 0) < 0
                 if want[k] > max(cur, 0) and not hedged and self.news.blocked(s, now):
+                    held_back = (want[k] - max(cur, 0)) * px.get(s, 0.0)
                     want[k] = max(cur, 0)
+                    until = self.news.blocked_until(s, now)
+                    if held_back >= MIN_TRADE_USD and self._veto_noted.get(k) != until:
+                        self._veto_noted[k] = until
+                        self.emit("news", "DESK", f"News veto held back {s if venue == 'spot' else perp_name(s)}",
+                                  f"{usd(held_back)} of new long exposure blocked until "
+                                  f"{datetime.fromtimestamp(until, ET).strftime('%a %H:%M')} ET.", "warn", s)
         tier_now = self.fees.tier(now)
         for k in set(want) | set(self._prev_want):
             s = k.split(":")[1]
@@ -618,8 +651,10 @@ class Quorum:
         if self.alt is None:
             return
         total = 0.0
+        srcs: set[str] = set()
         for s in list(self.book.perps):
-            rate = float(self.alt.hourly_funding(s, np.array([bar]))[0])
+            rate, src = self.alt.funding_at(s, bar, live=self.desk_source is None)
+            srcs.add(src)
             total += self.book.accrue_funding(s, rate, px.get(s, self.book.perps[s].avg), bar + 3600)
             for a in AGENTS:
                 q = self.agent_q.get(a, {}).get(f"perp:{s}", 0.0)
@@ -627,6 +662,8 @@ class Quorum:
                 self.agent_pnl[a]["funding"] += pay
                 self.agent_pnl[a]["all"] -= pay
         self._funding_hour = total
+        if srcs:
+            self.funding_src = srcs.pop() if len(srcs) == 1 else "mixed"
 
     # ============================================================ reporting
     def _period_marks(self, now: float) -> None:
@@ -689,6 +726,10 @@ class Quorum:
                         "month": dt.strftime("%B %Y"), "days_left": (nxt - dt).days,
                         "exposure": exp, "fees": self.book.fees, "funding": self.book.funding_total,
                         "netting_saved": self.netting_saved, "margin": MARGIN * self.book.perp_gross(px),
+                        "interest": self.book.interest_total, "cash_apy": self.cash_apy,
+                        "idle_cash": self.book.idle_cash(px),
+                        "funding_source": self.funding_src,
+                        "funding_hours": int(len(self.alt.cb.get("BTC-USD", ()))) if self.alt is not None else 0,
                         "tax_ytd": tax, "fee_tier": self.fees.tier(now).name,
                         "costs": {"long_venue": self.costs.long_venue, "carry_on": self.costs.carry_on}},
             "agents": agents,
@@ -716,7 +757,7 @@ class Quorum:
                         "owners": owners.get(f"spot:{s}", {})})
         for s, pos in sorted(self.book.perps.items()):
             p = px.get(s, pos.avg)
-            out.append({"key": f"perp:{s}", "instrument": perp_name(s), "product": f"{PERP_ID[s]}-20DEC30-CDE",
+            out.append({"key": f"perp:{s}", "instrument": perp_name(s), "product": perp_product(s),
                         "venue": "perp", "side": "long" if pos.qty > 0 else "short",
                         "qty": pos.qty, "contracts": round(abs(pos.qty) / CONTRACT[s]), "avg": pos.avg, "mark": p,
                         "value": pos.qty * p, "pnl": pos.qty * (p - pos.avg), "funding": pos.funding,
@@ -736,6 +777,8 @@ class Quorum:
                 "carry_row": getattr(self, "_carry_row", {}), "nova_base": getattr(self, "_nova_base", {}),
                 "nova_oracle": getattr(self, "_nova_oracle", {}), "fills": list(self.fills)[:150],
                 "last_intent": self._last_intent, "prev_want": self._prev_want, "netting_saved": self.netting_saved,
+                "last_interest_ts": self.last_interest_ts, "funding_src": self.funding_src,
+                "veto_noted": self._veto_noted,
                 "tax": self.tax.to_json(), "balance": self.balance}
 
     def load(self, d: dict) -> None:
@@ -766,6 +809,9 @@ class Quorum:
         self._last_intent = {k: _freeze(v) for k, v in d.get("last_intent", {}).items()}
         self._prev_want = d.get("prev_want", {})
         self.netting_saved = d.get("netting_saved", 0.0)
+        self.last_interest_ts = d.get("last_interest_ts")
+        self.funding_src = d.get("funding_src")
+        self._veto_noted = d.get("veto_noted", {})
         t = d.get("tax")
         if t:
             self.tax = TaxSettings(t.get("filing_status", "single"), t.get("other_income", 75_000),

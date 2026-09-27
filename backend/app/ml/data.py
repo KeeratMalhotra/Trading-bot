@@ -111,6 +111,45 @@ class HistoryStore:
             await asyncio.gather(*(one(client, s) for s in self.symbols))
         self.progress = 1.0
 
+    async def backfill(self, since: float, concurrency: int = 3) -> None:
+        """One-off, for long backtests: extend each coin's history back to `since`
+        (update() only ever moves forward). Coins that didn't trade yet just return nothing."""
+        if not self.raw:
+            self.load()
+        sem = asyncio.Semaphore(concurrency)
+
+        async def one(client: httpx.AsyncClient, s: str) -> None:
+            arr = self.raw[s]
+            end = int(arr[0, 0]) if len(arr) else int(time.time() // TF * TF)
+            rows: dict[int, list[float]] = {}
+            for a in range(int(since // TF * TF), end, TF * 300):
+                b = min(a + TF * 300, end)
+                async with sem:
+                    for attempt in range(4):
+                        try:
+                            cs = await fetch_candles(client, s, TF, a, b)
+                            break
+                        except Exception as e:  # noqa: BLE001
+                            if attempt == 3:
+                                raise
+                            log.warning("retry %s %s: %s", s, a, e)
+                            await asyncio.sleep(1.5 * (attempt + 1))
+                    await asyncio.sleep(0.11)
+                for c in cs:
+                    if a <= c.t < b:
+                        rows[c.t] = [c.t, c.o, c.h, c.l, c.c, c.v]
+            if rows:
+                new = np.array([rows[k] for k in sorted(rows)], dtype=float)
+                merged = np.vstack([new, arr]) if len(arr) else new
+                _, idx = np.unique(merged[:, 0], return_index=True)
+                self.raw[s] = merged[idx]
+                self._save(s)
+                log.info("%s: +%d older bars, history now starts %s", s, len(rows),
+                         time.strftime("%Y-%m-%d", time.gmtime(self.raw[s][0, 0])))
+
+        async with httpx.AsyncClient(headers=HEADERS, timeout=20) as client:
+            await asyncio.gather(*(one(client, s) for s in self.symbols))
+
     # ---------------------------------------------------------- access
     def series(self, symbol: str, until: float | None = None) -> list[Series]:
         """Contiguous segments (small gaps forward-filled, zero volume)."""
@@ -155,10 +194,17 @@ class HistoryStore:
 
 
 def main() -> None:
+    import argparse
+    from datetime import datetime, timezone
     logging.basicConfig(level=logging.INFO)
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--since", default=None, help="also backfill history back to this date, e.g. 2015-07-20")
+    a = ap.parse_args()
     st = HistoryStore()
     t0 = time.time()
     asyncio.run(st.update())
+    if a.since:
+        asyncio.run(st.backfill(datetime.strptime(a.since, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp()))
     print(f"done in {time.time() - t0:.0f}s")
     for s, d in st.summary().items():
         print(s, d["bars"], time.strftime("%Y-%m-%d", time.gmtime(d["from"])), "->",

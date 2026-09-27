@@ -13,7 +13,7 @@ This is an ESTIMATE for entertainment/education, not tax advice.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 INF = float("inf")
 
@@ -111,15 +111,17 @@ def _total(s: TaxSettings, st: float, lt: float) -> dict:
             "marginal_federal": _marginal(ordinary_taxable, FED_BRACKETS[fs])}
 
 
-def estimate(s: TaxSettings, st_gain: float, lt_gain: float = 0.0) -> dict:
-    """Incremental tax caused by the trading gains (vs. your other income alone)."""
+def estimate(s: TaxSettings, st_gain: float, lt_gain: float = 0.0, ordinary: float = 0.0) -> dict:
+    """Incremental tax caused by the trading gains (vs. your other income alone).
+    ordinary: extra ordinary income such as interest/rewards on idle cash (not a capital gain,
+    so capital losses can't offset it beyond the usual $3,000)."""
     base = _total(s, 0.0, 0.0)
-    withg = _total(s, st_gain, lt_gain)
+    withg = _total(replace(s, other_income=s.other_income + ordinary) if ordinary else s, st_gain, lt_gain)
     fed = withg["federal"] - base["federal"]
     niit = withg["niit"] - base["niit"]
-    state = withg["state"] - base["state"]
+    state = withg["state"] - base["state"] + s.state_rate * ordinary
     total = fed + niit + state
-    gains = st_gain + lt_gain
+    gains = st_gain + lt_gain + ordinary
     return {"federal": fed, "niit": niit, "state": state, "total": total,
             "effective_rate": (total / gains) if gains > 0 else 0.0,
             "marginal_federal": withg["marginal_federal"], "state_rate": s.state_rate,

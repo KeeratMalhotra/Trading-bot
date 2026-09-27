@@ -18,13 +18,13 @@ from ..ml.altdata import AltData
 from ..ml.data import TF, HistoryStore
 from .engine import AGENTS, Quorum
 from .forecaster import ReplayForecaster
-from .research import START, CostModel, compute_all, stats
+from .research import CostModel, compute_all, stats
 
 SPREAD = {"BTC-USD": 0.0001, "ETH-USD": 0.0002}
 
 
 def run(start: float, end: float, balance: float, spot_maker: float = 0.006, spot_taker: float = 0.012,
-        verbose: bool = True, db_path: str | None = None) -> dict:
+        verbose: bool = True, db_path: str | None = None, cash_apy: float = 0.0) -> dict:
     store = HistoryStore()
     store.load()
     alt = AltData()
@@ -33,6 +33,11 @@ def run(start: float, end: float, balance: float, spot_maker: float = 0.006, spo
     t0 = time.time()
     desk = compute_all(store, alt, costs=costs)
     fc = ReplayForecaster(store)
+    have = np.where(np.isfinite(fc.P["long"]).any(axis=1))[0]
+    first_fc = float(fc.t[have[0]]) if len(have) else float("inf")
+    if verbose and start < first_fc:
+        print(f"note: ORACLE's out-of-sample forecasts only start {time.strftime('%Y-%m-%d', time.gmtime(first_fc))} "
+              "(it can trade 30 days after that). For earlier starts see 'Longer history' in the README.")
     syms = store.symbols
     idx = {s: {int(r[0]): r for r in store.raw[s]} for s in syms}
     cur: dict[str, tuple] = {}
@@ -53,7 +58,7 @@ def run(start: float, end: float, balance: float, spot_maker: float = 0.006, spo
         db = Store(Path(db_path))
         db.clear()
     q = Quorum(syms, balance, prices, bars, fc, None, db, store, alt, desk_source=desk, costs=costs,
-               clock=lambda: clock["t"])
+               clock=lambda: clock["t"], cash_apy=cash_apy)
     q.fees.mode = next((t.name for t in __import__("app.config", fromlist=["x"]).COINBASE_FEE_TIERS
                         if abs(t.maker - spot_maker) < 1e-9), "Intro 1")
     q.started = start
@@ -100,7 +105,8 @@ def run(start: float, end: float, balance: float, spot_maker: float = 0.006, spo
     sim_stats = stats(fake2, res_r, lo=start)
     out = {"elapsed_s": round(time.time() - t0, 1), "engine": eng_stats, "research_sim": sim_stats,
            "trades": len(q.fills), "oracle_trades": len(q.oracle_closed), "fees": q.book.fees,
-           "funding": round(q.book.funding_total, 2), "final_equity": round(q.equity(), 2),
+           "funding": round(q.book.funding_total, 2), "interest": round(q.book.interest_total, 2),
+           "final_equity": round(q.equity(), 2),
            "agents_pnl": {a: round(q.agent_pnl[a]["all"], 2) for a in AGENTS}}
     if verbose:
         f = lambda ts: datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d")  # noqa: E731
@@ -110,7 +116,8 @@ def run(start: float, end: float, balance: float, spot_maker: float = 0.006, spo
             print(f"  {k:<13} total {v['total_pct']:>7.1f}%  maxDD {v['max_dd_pct']:>5.1f}%  Sharpe {v['sharpe']:>5.2f}  "
                   f"months {v['up_months']}/{v['down_months']}  worst {v['worst_month_pct']:.1f}%  {v['yearly_pct']}")
         print(f"  fills {out['trades']} (last 300 kept) · ORACLE trades {out['oracle_trades']} · fees {out['fees']} · "
-              f"funding {out['funding']} · agents {out['agents_pnl']}")
+              f"funding {out['funding']} · interest {out['interest']} · final equity {out['final_equity']:,.0f} · "
+              f"agents {out['agents_pnl']}")
     return out
 
 
@@ -122,10 +129,11 @@ def main() -> None:
     ap.add_argument("--spot-maker", type=float, default=0.006)
     ap.add_argument("--spot-taker", type=float, default=0.012)
     ap.add_argument("--db", default=None)
+    ap.add_argument("--cash-apy", type=float, default=0.0, help="yield on idle cash, e.g. 0.0375 (default off)")
     a = ap.parse_args()
     ts = lambda s: datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp()  # noqa: E731
     end = ts(a.end) if a.end else time.time() // 86400 * 86400
-    run(max(ts(a.start), START), end, a.balance, a.spot_maker, a.spot_taker, db_path=a.db)
+    run(ts(a.start), end, a.balance, a.spot_maker, a.spot_taker, db_path=a.db, cash_apy=a.cash_apy)
 
 
 if __name__ == "__main__":

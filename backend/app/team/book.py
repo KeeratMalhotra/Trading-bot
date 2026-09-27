@@ -24,8 +24,16 @@ STOP_SLIP = {"BTC-USD": 0.0010, "ETH-USD": 0.0015}   # extra slippage when a sto
 STOP_SLIP_ALT = 0.0030
 
 
+PERP_EXPIRY = "20DEC30-CDE"  # current 5-year perpetual-style contracts (expire 2030-12-20)
+
+
 def perp_name(symbol: str) -> str:
     return f"{symbol.split('-')[0]}-PERP"
+
+
+def perp_product(symbol: str) -> str:
+    """Coinbase product id, e.g. BTC-USD -> BIP-20DEC30-CDE."""
+    return f"{PERP_ID[symbol]}-{PERP_EXPIRY}"
 
 
 @dataclass
@@ -63,6 +71,8 @@ class Book:
         self.fees = {"spot": 0.0, "perp": 0.0}
         self.funding_total = 0.0
         self.perp_realized: dict[int, float] = {}   # year -> realized P&L (incl. funding & fees)
+        self.interest_total = 0.0                    # yield on idle cash (e.g. USDC rewards)
+        self.interest_by_year: dict[int, float] = {}
         self.deposits = cash
 
     # ------------------------------------------------------------ valuation
@@ -145,19 +155,31 @@ class Book:
         self.perp_realized[y] = self.perp_realized.get(y, 0.0) - pay
         return pay
 
+    def idle_cash(self, px: dict[str, float]) -> float:
+        """Cash not needed as futures margin."""
+        return self.cash - MARGIN * self.perp_gross(px)
+
+    def credit_interest(self, amount: float, ts: float) -> None:
+        self.cash += amount
+        self.interest_total += amount
+        y = time.gmtime(ts).tm_year
+        self.interest_by_year[y] = self.interest_by_year.get(y, 0.0) + amount
+
     # ------------------------------------------------------------ taxes
     def tax_estimate(self, settings: taxlib.TaxSettings, px: dict[str, float], year: int) -> dict:
         st = sum(d.gain for d in self.spot.disposals if d.term == "short" and time.gmtime(d.sold_ts).tm_year == year)
         lt = sum(d.gain for d in self.spot.disposals if d.term == "long" and time.gmtime(d.sold_ts).tm_year == year)
         s1256 = self.perp_realized.get(year, 0.0) + self.perp_unrealized(px)   # marked to market at year end
-        est = taxlib.estimate(settings, st + 0.4 * s1256, lt + 0.6 * s1256)
-        est.update({"spot_short_term": st, "spot_long_term": lt, "section_1256": s1256})
+        interest = self.interest_by_year.get(year, 0.0)                        # ordinary income
+        est = taxlib.estimate(settings, st + 0.4 * s1256, lt + 0.6 * s1256, ordinary=interest)
+        est.update({"spot_short_term": st, "spot_long_term": lt, "section_1256": s1256, "interest": interest})
         return est
 
     # ------------------------------------------------------------ persistence
     def dump(self) -> dict:
         return {"cash": self.cash, "spot": self.spot.dump(), "fees": self.fees, "funding_total": self.funding_total,
                 "perp_realized": self.perp_realized, "deposits": self.deposits,
+                "interest_total": self.interest_total, "interest_by_year": self.interest_by_year,
                 "perps": {s: asdict(p) for s, p in self.perps.items()}}
 
     def load(self, d: dict) -> None:
@@ -167,5 +189,7 @@ class Book:
         self.fees = d.get("fees", self.fees)
         self.funding_total = d.get("funding_total", 0.0)
         self.perp_realized = {int(k): v for k, v in d.get("perp_realized", {}).items()}
+        self.interest_total = d.get("interest_total", 0.0)
+        self.interest_by_year = {int(k): v for k, v in d.get("interest_by_year", {}).items()}
         self.deposits = d.get("deposits", self.cash)
         self.perps = {s: PerpPos(**p) for s, p in d.get("perps", {}).items()}
