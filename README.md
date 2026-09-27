@@ -88,13 +88,16 @@ Prices are always live Coinbase prices. If Coinbase can't be reached at startup,
 3. **OBS:** add a Browser Source at `http://localhost:8000`, 1920×1080, and tick *Refresh browser when scene becomes active*. The page reconnects by itself after a server restart.
 4. **Check on it:** `curl localhost:8000/api/health` shows the feed, forecaster, desk, news desk and funding recorder status.
 5. **Labelling:** keep the **PAPER TRADING** badge and put a line in the stream description, for example "Paper trading: simulated orders on live Coinbase prices. Not financial advice." Viewers may act on what they see.
-6. **Starting over:** stop the app and delete `backend/data/botbattle.sqlite3` (Docker: `docker compose down -v`, which also deletes the downloaded history, so the next start takes ~10 minutes again).
+6. **Closing and reopening:** the account is saved every 10 seconds and on shutdown, and restored on the next start. That covers cash, positions, stops and history. While it's closed, nothing is simulated: no trades, no stops, and no funding for those hours. A stop crossed in the meantime fills at the price when it reopens. ORACLE retrains for a minute or two after each start before opening new trades.
+7. **Changing the starting amount / starting over:** `TEAM_BALANCE` only applies to a new account. To start over, stop the app, set `TEAM_BALANCE`, and delete the saved account. The downloaded history is kept, so it's trading again within minutes:
+   - `./run.sh`: `rm -f backend/data/botbattle.sqlite3*`
+   - Docker: `docker compose stop && docker compose run --rm botbattle sh -c 'rm -f /data/botbattle.sqlite3*' && docker compose up -d`
 
 ### Configuration (`.env`)
 
 | Variable | Default | |
 |---|---|---|
-| `TEAM_BALANCE` | `30000` | Starting account value (USD) |
+| `TEAM_BALANCE` | `30000` | Starting account value (USD). Only used when a new account is created; see "Changing the starting amount" above. Paper fills don't model order-book depth, so very large amounts (e.g. $1M) look better on paper than they would live |
 | `TAX_FILING_STATUS` | `single` | `single` or `mfj` |
 | `TAX_OTHER_INCOME` | `75000` | Sets your tax bracket |
 | `TAX_STATE` | `XX` | Two-letter state code (`XX` = federal only) |
