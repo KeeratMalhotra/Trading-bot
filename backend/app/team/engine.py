@@ -33,6 +33,7 @@ from ..execution.fees import FeeTracker
 from .book import (CONTRACT, MARGIN, PERP_FEE, PERP_SLIP, PERP_SLIP_ALT, STOP_SLIP, STOP_SLIP_ALT, Book, perp_name,
                    perp_product)
 from .research import NOVA_UNIVERSE, CostModel, DeskState, compute_all
+from .show import Show
 
 log = logging.getLogger("team.engine")
 ET = ZoneInfo("America/New_York")
@@ -54,6 +55,7 @@ STRAT_LABEL = {"btc_regime": "BTC trend", "trend": "BTC/ETH trend", "rotation": 
                "oracle_short": "ORACLE shorts"}
 ORACLE_SIZE = 0.20
 ORACLE_MAX = 5               # per side
+MIX_FEE = 0.006              # spot fee the what-if portfolio pays when it buys/sells BTC (small-account maker)
 DAILY_BAND = 0.05            # daily rebalance: fix drift above 5% of the target
 MIN_TRADE_USD = 20.0
 _ids = itertools.count(1)
@@ -106,8 +108,11 @@ class Quorum:
         self.fixed_costs = costs
         self.clock = clock
         self.balance = balance
-        from ..config import CASH_APY, TAX_FILING_STATUS, TAX_OTHER_INCOME, TAX_STATE
+        from ..config import CASH_APY, MIX_BTC_SHARE, MIX_REBALANCE, TAX_FILING_STATUS, TAX_OTHER_INCOME, TAX_STATE
+        from .mixbacktest import rebalance_months
         self.cash_apy = CASH_APY if cash_apy is None else cash_apy
+        self.mix_share = MIX_BTC_SHARE
+        self.mix_months = rebalance_months(MIX_REBALANCE)
         self.tax = TaxSettings(TAX_FILING_STATUS, TAX_OTHER_INCOME, TAX_STATE)
         self.reset(balance)
 
@@ -149,6 +154,9 @@ class Quorum:
         self._last_scale = 1.0
         self.netting_saved = 0.0
         self.last_interest_ts: float | None = None
+        self.mix: dict | None = None               # what-if portfolio: {"q": share of the account, "b": BTC units, ...}
+        self.mix_value: float | None = None
+        self.show = Show(self)                     # stream features (display only): voices, jerseys, cards, milestones
         self.funding_src: str | None = None       # coinbase | deribit | mixed (last hour charged)
         self._veto_noted: dict[str, float] = {}   # key -> veto end already announced
 
@@ -189,6 +197,7 @@ class Quorum:
         self._attribute_marks(px)
         self._accrue_interest(now, px)
         self._period_marks(now)
+        self.show.on_step(now, px)
         day = int(now // DAY) - 1                     # most recent COMPLETED UTC day
         if day > self.last_day and self._day_ready(day, now):
             self.on_day(day, now)
@@ -197,6 +206,10 @@ class Quorum:
             if bar and bar > self.last_hour_bar:
                 self.on_hour(bar, now)
         self._live_barriers(px, now)
+        if self.mix_share > 0 and px.get("BTC-USD"):
+            if self.mix is None:
+                self.init_mix(px["BTC-USD"], now)
+            self.mix_value = self.mix_at(now, self.book.equity(px), px["BTC-USD"])
         if now - self.last_sample >= (900 if self.desk_source is None else 3600):
             self.last_sample = now
             self._sample(now, px)
@@ -209,6 +222,31 @@ class Quorum:
         idle = self.book.idle_cash(px)
         if idle > 0:     # cash keeps earning while the app is paused or down, like a real balance would
             self.book.credit_interest(idle * self.cash_apy * (now - last) / (365 * DAY), now)
+
+    # ============================================================ what-if: part of the money in BTC
+    def _mix_period(self, ts: float) -> int:
+        from .mixbacktest import period
+        dt = datetime.fromtimestamp(ts, ET)
+        return period(dt.year, dt.month, self.mix_months)
+
+    def init_mix(self, btc0: float, t0: float) -> None:
+        """At the account's start, split the deposit: (1-s) stays in the account, s buys BTC (one spot fee)."""
+        s, dep = self.mix_share, self.book.deposits
+        self.mix = {"q": 1 - s, "b": s * dep * (1 - MIX_FEE) / btc0, "period": self._mix_period(t0),
+                    "t0": t0, "btc0": btc0}
+
+    def mix_at(self, now: float, eq: float, btc: float) -> float:
+        """Value of the what-if portfolio. Every MIX_REBALANCE months (calendar periods in New York time:
+        6 = Jan 1 and Jul 1) it goes back to the split, paying the spot fee on the BTC it buys or sells."""
+        m = self.mix
+        p = self._mix_period(now)
+        m.setdefault("period", p)
+        if self.mix_months and p != m["period"] and eq > 0:
+            v = m["q"] * eq + m["b"] * btc
+            v -= abs(self.mix_share * v - m["b"] * btc) * MIX_FEE
+            m.update(q=(1 - self.mix_share) * v / eq, b=self.mix_share * v / btc)
+        m["period"] = p
+        return m["q"] * eq + m["b"] * btc
 
     def _day_ready(self, day: int, now: float) -> bool:
         if self.desk_source is not None:
@@ -252,10 +290,12 @@ class Quorum:
         was = self.regime.get("btc_on")
         self.regime = {"btc_on": btc_on, "btc_close": float(st.d.C[i, b]), "btc_sma200": s200,
                        "fear_greed": float(st.d.G[i]) if np.isfinite(st.d.G[i]) else None, "day": day}
-        if was is None or was != btc_on:
+        regime_changed = was is None or was != btc_on
+        if regime_changed:
             self.emit("regime", "ATLAS", f"Market regime: {'BULL' if btc_on else 'RISK-OFF'}",
                       f"BTC closed at {fmt_px(self.regime['btc_close'])} vs its 200-day average {fmt_px(s200)}.",
                       "good" if btc_on else "warn")
+            self.show.regime(btc_on, self.regime["btc_close"], s200, now)
         long_key = "spot" if c.long_venue == "spot" else "perp"
 
         def row(W, venue):
@@ -289,13 +329,15 @@ class Quorum:
         from .research import sharpe
         R = np.stack([st.lib[n] for n in NOVA_UNIVERSE], axis=1)[max(0, i - 90):i + 1]
         self.nova_sharpe = {n: round(sharpe(R[:, k]), 2) for k, n in enumerate(NOVA_UNIVERSE)}
-        if picks != self.nova_picks:
-            txt = ", ".join(f"{STRAT_LABEL[k]} {v * 100:.0f}%" for k, v in sorted(picks.items(), key=lambda x: -x[1]))
+        txt = ", ".join(f"{STRAT_LABEL[k]} {v * 100:.0f}%" for k, v in sorted(picks.items(), key=lambda x: -x[1]))
+        reviewed = picks != self.nova_picks
+        if reviewed:
             dropped = [STRAT_LABEL[k] for k in self.nova_picks if k not in picks]
             self.emit("nova", "NOVA", "Weekly strategy review",
                       (f"Backing: {txt}." if picks else "Nothing has a positive 90-day record. Going to cash.")
                       + (f" Dropped: {', '.join(dropped)}." if dropped else ""), "info",
                       data={"picks": picks, "sharpe": self.nova_sharpe})
+            self.show.nova_review(txt, ", ".join(dropped), now)
             self.nova_picks = picks
         self.agent_mode["NOVA"] = ("Backing " + " + ".join(STRAT_LABEL[k] for k in sorted(picks, key=lambda k: -picks[k])[:2])
                                    + (f" +{len(picks) - 2}" if len(picks) > 2 else "")) if picks else "Cash · waiting"
@@ -322,10 +364,14 @@ class Quorum:
             self.emit("desk", "DESK", f"{datetime.fromtimestamp(now, ET).strftime('%B')} capital allocation",
                       " · ".join(f"{a} {dw[a] * 100:.0f}% (90-day Sharpe {sh[a]:+.2f})" for a in AGENTS), "info",
                       data={"weights": dw, "sharpe": sh})
+            self.show.desk(dict(self.desk_w), dw, now)
             self.desk_w = dw
         for a in ("ATLAS", "NOVA"):
             self._announce(a, before[a], self.targets[a])
         self.rebalance(now, reason="daily")
+        shorts = 0 if btc_on else sum(1 for k, v in atlas.items() if k.startswith("perp:") and v < 0
+                                      and k.replace("perp", "spot") not in atlas)
+        self.show.daily(st, i, now, regime_changed, reviewed, txt, shorts)
         eq = self.equity()
         m0 = self.month_start.get(et_month(now), eq)
         ex = self.book.exposure(self.px())
@@ -414,6 +460,7 @@ class Quorum:
                       f" · 14-day window · {ORACLE_SIZE * 100:.0f}% of ORACLE capital. "
                       + ("; ".join(tr["reasons"][:2]) + "." if tr["reasons"] else ""), "info", s,
                       data={"trade": tr})
+            self.show.oracle_open(tr, now)
         if len(self.oracle_trades) == opened_before:
             best = None
             for s in self.symbols:
@@ -428,6 +475,8 @@ class Quorum:
                 why = "book full" if n >= ORACLE_MAX else "below the bar"
                 self.emit("scan", "ORACLE", f"Scan · best {side} {coin(best[0])} {best[1]:+.2f}R",
                           f"Bar {thr:+.2f}R · {why} · {len(self.oracle_trades)} open.", "info", best[0])
+                if not self.oracle_trades or n >= ORACLE_MAX:     # with trades running, it talks about those
+                    self.show.oracle_scan(coin(best[0]), best[1], thr, n, n >= ORACLE_MAX, len(self.symbols), now)
         self._refresh_oracle_targets()
         self.rebalance(now, reason="hourly")
 
@@ -470,6 +519,7 @@ class Quorum:
         self.emit("signal", "ORACLE", f"CLOSE {perp_name(tr['symbol'])} {tr['side']} · {label}",
                   f"{fmt_px(tr['entry'])} → {fmt_px(price)} ({r * 100:+.2f}%, {R:+.2f}R).",
                   "good" if r > 0 else "bad", tr["symbol"], data={"trade": tr})
+        self.show.oracle_close(tr, now)
         self._refresh_oracle_targets()
 
     def _refresh_oracle_targets(self) -> None:
@@ -594,7 +644,10 @@ class Quorum:
                     continue
                 slip = PERP_SLIP.get(s, PERP_SLIP_ALT)
                 price = (ask if diff > 0 else bid) * (1 + slip if diff > 0 else 1 - slip)
+                pos0 = self.book.perps.get(s)
+                q0, avg0, fund0 = (pos0.qty, pos0.avg, pos0.funding) if pos0 else (0.0, 0.0, 0.0)
                 f = self.book.trade_perp(s, diff, price, now)
+                self.show.perp_fill(s, q0, avg0, fund0, f, now)
             else:
                 diff = tgt - cur
                 if abs(diff) * last < MIN_TRADE_USD or (tgt > 0 and abs(diff) * last < 0.0025 * eq):
@@ -687,7 +740,8 @@ class Quorum:
         self.equity_hist.append(row)
         if self.db is not None:
             self.db.add_equity([("team", now, eq), ("BTC", now, px.get("BTC-USD", 0.0))]
-                               + [(a, now, self.agent_pnl[a]["all"]) for a in AGENTS])
+                               + [(a, now, self.agent_pnl[a]["all"]) for a in AGENTS]
+                               + ([("mix", now, self.mix_value)] if self.mix_value is not None else []))
 
     def drain(self) -> list[dict]:
         out, self.outbox = self.outbox, []
@@ -705,6 +759,7 @@ class Quorum:
         tax = self.book.tax_estimate(self.tax, px, time.gmtime(now).tm_year)
         exp = self.book.exposure(px)
         agents = []
+        show = self.show.summary(now)
         for a in AGENTS:
             ad = self.agent_day_start.get(d, {}).get(a, self.agent_pnl[a]["all"])
             am = self.agent_month_start.get(m, {}).get(a, self.agent_pnl[a]["all"])
@@ -715,6 +770,9 @@ class Quorum:
                            "pnl_today": self.agent_pnl[a]["all"] - ad, "pnl_mtd": self.agent_pnl[a]["all"] - am,
                            "pnl_all": self.agent_pnl[a]["all"], "fees": self.agent_pnl[a]["fees"],
                            "funding": self.agent_pnl[a]["funding"],
+                           "say": self.show.voice.get(a), "week": show["standings"].get(a),
+                           "wins": show["wins"].get(a, 0),
+                           "fans": ((show["week"] or {}).get("fans") or {}).get(a),
                            "targets": [{"key": k, "weight": v} for k, v in sorted(self.targets[a].items(), key=lambda x: -abs(x[1]))]})
         closed = list(self.oracle_closed)
         wins = sum(1 for t in closed if t["ret"] > 0)
@@ -727,6 +785,9 @@ class Quorum:
                         "exposure": exp, "fees": self.book.fees, "funding": self.book.funding_total,
                         "netting_saved": self.netting_saved, "margin": MARGIN * self.book.perp_gross(px),
                         "interest": self.book.interest_total, "cash_apy": self.cash_apy,
+                        "mix": None if self.mix_value is None else {
+                            "value": self.mix_value, "ret": self.mix_value / self.book.deposits - 1,
+                            "btc_share": self.mix_share, "rebalance_months": self.mix_months},
                         "idle_cash": self.book.idle_cash(px),
                         "funding_source": self.funding_src,
                         "funding_hours": int(len(self.alt.cb.get("BTC-USD", ()))) if self.alt is not None else 0,
@@ -737,6 +798,7 @@ class Quorum:
             "oracle": {"open": self.oracle_trades, "closed": closed[:25], "wins": wins, "trades": len(closed)},
             "regime": self.regime,
             "nova": {"picks": self.nova_picks, "sharpe": self.nova_sharpe, "labels": STRAT_LABEL},
+            "show": {"week": show["week"], "wins": show["wins"], "reports": show["reports"]},
         }
 
     def positions_json(self, px: dict[str, float]) -> list[dict]:
@@ -777,8 +839,8 @@ class Quorum:
                 "carry_row": getattr(self, "_carry_row", {}), "nova_base": getattr(self, "_nova_base", {}),
                 "nova_oracle": getattr(self, "_nova_oracle", {}), "fills": list(self.fills)[:150],
                 "last_intent": self._last_intent, "prev_want": self._prev_want, "netting_saved": self.netting_saved,
-                "last_interest_ts": self.last_interest_ts, "funding_src": self.funding_src,
-                "veto_noted": self._veto_noted,
+                "last_interest_ts": self.last_interest_ts, "funding_src": self.funding_src, "mix": self.mix,
+                "veto_noted": self._veto_noted, "show": self.show.dump(),
                 "tax": self.tax.to_json(), "balance": self.balance}
 
     def load(self, d: dict) -> None:
@@ -811,7 +873,11 @@ class Quorum:
         self.netting_saved = d.get("netting_saved", 0.0)
         self.last_interest_ts = d.get("last_interest_ts")
         self.funding_src = d.get("funding_src")
+        self.mix = d.get("mix")
         self._veto_noted = d.get("veto_noted", {})
+        self.show.load(d.get("show") or {})
+        if "show" not in d:        # account from before these features: don't celebrate old milestones now
+            self.show.catch_up(self.equity() if self.px() else self.book.cash, len(self.oracle_closed))
         t = d.get("tax")
         if t:
             self.tax = TaxSettings(t.get("filing_status", "single"), t.get("other_income", 75_000),

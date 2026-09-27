@@ -16,6 +16,11 @@ MARKET_SOURCE = os.getenv("MARKET_SOURCE", "auto")
 # Yield earned on idle cash (cash not needed as futures margin), e.g. 0.0375 for USDC rewards.
 # 0 = off. Only set it if your real account would earn it (e.g. Coinbase One + cash held as USDC).
 CASH_APY = float(os.getenv("CASH_APY", "0"))
+# Dashboard "what if" line: the same starting amount with this share held in BTC instead
+# (bought once at the start). Display only, it never affects trading. 0 = hide it.
+MIX_BTC_SHARE = min(max(float(os.getenv("MIX_BTC_SHARE", "0.4")), 0.0), 1.0)
+# how often it goes back to the split: never | monthly | quarterly | 6m | yearly | 2y, or a number of months
+MIX_REBALANCE = os.getenv("MIX_REBALANCE", "yearly")
 FEED_STALE_S = 60.0          # no Coinbase ticks for this long -> trading pauses until the feed is back
 STARTING_BALANCE = float(os.getenv("STARTING_BALANCE", "10000"))
 TEAM_BALANCE = float(os.getenv("TEAM_BALANCE", "30000"))  # QUORUM team account

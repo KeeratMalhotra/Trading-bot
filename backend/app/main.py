@@ -251,7 +251,24 @@ def history_payload(now: float) -> dict:
     if ms and ms[-1][1]:
         mret[ms[-1][0]] = {"pnl": eq - ms[-1][1], "ret": eq / ms[-1][1] - 1}
     return {"equity": thin(team), "btc": thin(btc), "agents": {a: thin(rows.get(a, [])) for a in AGENTS},
-            "day_pnl": day_pnl, "months": mret}
+            "mix": thin(rows.get("mix", [])), "day_pnl": day_pnl, "months": mret}
+
+
+def _start_mix() -> None:
+    """Accounts that were already running when the what-if line was added: start it at the account's
+    first saved sample and rebuild its past from the saved account/BTC history, so the chart compares
+    like with like. New accounts start it with the first live BTC price."""
+    q = S.q
+    if q.mix is not None or q.mix_share <= 0:
+        return
+    rows = S.store.equity(0)
+    team, btc = rows.get("team", []), dict(rows.get("BTC", []))
+    pts = [(t, eq, btc[t]) for t, eq in team if btc.get(t, 0) > 0]
+    if not pts:
+        return
+    q.init_mix(pts[0][2], pts[0][0])
+    S.store.add_equity([("mix", t, q.mix_at(t, eq, p)) for t, eq, p in pts])
+    log.info("what-if portfolio rebuilt from %d saved samples", len(pts))
 
 
 def snapshot(now: float) -> dict:
@@ -281,6 +298,7 @@ async def lifespan(app: FastAPI):
     saved = S.store.kv_get("quorum")
     if saved:
         S.q.load(saved)
+        _start_mix()
         S.q.emit("system", "DESK", "Systems online", "State restored. Positions, stops and targets re-armed.")
     else:
         S.q.emit("system", "DESK", "Account opened", f"QUORUM starts with {TEAM_BALANCE:,.0f} USD. "
@@ -313,6 +331,13 @@ def health():
             "positions": len(S.q.book.perps)}
 
 
+@app.get("/api/backtest")
+def api_backtest():
+    """Hypothetical long backtest for the Backtest tab: BTC held alone vs the what-if split (MIX_* settings)."""
+    from .team.mixbacktest import dashboard
+    return Response(dumps(dashboard(S.q.mix_share, S.q.mix_months)), media_type="application/json")
+
+
 @app.get("/api/snapshot")
 def api_snapshot():
     return Response(dumps(snapshot(time.time())), media_type="application/json")
@@ -342,6 +367,16 @@ def settings(body: SettingsIn, x_admin_token: str | None = Header(None)):
     if body.state in STATE_RATES:
         t.state = body.state
     return t.to_json()
+
+
+@app.post("/api/jerseys")
+def jerseys(body: dict[str, float], x_admin_token: str | None = Header(None)):
+    """This week's fan split for the team jerseys, e.g. from a Twitch/YouTube poll: {"ATLAS": 45, "ORACLE": 35, "NOVA": 20}."""
+    require_admin(x_admin_token)
+    fans = S.q.show.set_fans(body)
+    if fans is None:
+        raise HTTPException(409, "the week hasn't started yet")
+    return {"week": S.q.show.week["id"], "fans": fans}
 
 
 @app.get("/api/auth")

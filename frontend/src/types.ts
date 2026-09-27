@@ -27,6 +27,7 @@ export interface Account {
   interest?: number;
   cash_apy?: number;
   idle_cash?: number;
+  mix?: { value: number; ret: number; btc_share: number; rebalance_months: number } | null;
   funding_source?: "coinbase" | "deribit" | "mixed" | null;
   funding_hours?: number;
   tax_ytd: {
@@ -61,6 +62,57 @@ export interface Agent {
   fees: number;
   funding: number;
   targets: { key: string; weight: number }[];
+  say?: { text: string; ts: number; key: string } | null;
+  week?: { pnl: number; ret: number; rank: number } | null;
+  wins?: number;
+  fans?: number | null;
+}
+
+export interface TradeCard {
+  agent: string;
+  agents: string[];
+  symbol: string;
+  instrument: string;
+  side: "long" | "short";
+  entry: number;
+  exit: number;
+  opened: number | null;
+  closed: number;
+  pnl: number;
+  ret: number;
+  R?: number;
+  why: "TARGET" | "STOP" | "TIME" | "PLAN";
+  n: number;
+}
+
+export interface Milestone {
+  kind: "ath" | "return" | "streak" | "trades" | "days";
+  title: string;
+  text: string;
+}
+
+export interface WeeklyReport {
+  id: string;
+  label: string;
+  from: number;
+  to: number;
+  account: { pnl: number; ret: number };
+  btc_ret: number | null;
+  winner: string;
+  trades: number;
+  best: { agent: string; instrument: string; side: string; pnl: number; ret: number } | null;
+  worst: { agent: string; instrument: string; side: string; pnl: number; ret: number } | null;
+  desk: string[];
+  fans: Record<string, number> | null;
+  fans_result?: string;
+  wins: Record<string, number>;
+  agents: Record<string, { pnl: number; ret: number; rank: number; grade: string; line: string | null }>;
+}
+
+export interface ShowState {
+  week: { id: string; label: string; fans: Record<string, number> | null } | null;
+  wins: Record<string, number>;
+  reports: WeeklyReport[];
 }
 
 export interface Position {
@@ -107,6 +159,7 @@ export interface Live {
   oracle: { open: OracleTrade[]; closed: OracleTrade[]; wins: number; trades: number };
   regime: { btc_on: boolean | null; btc_close?: number; btc_sma200?: number; fear_greed?: number | null; day?: number };
   nova: { picks: Record<string, number>; sharpe: Record<string, number>; labels: Record<string, string> };
+  show?: ShowState;
   quotes: { s: string; p: number; chg: number }[];
   market: { source: string; connected: boolean; message?: string };
   engine: { forecaster: string; ready: boolean; desk_ready: boolean; paused?: boolean };
@@ -142,6 +195,7 @@ export interface History {
   equity: [number, number][];
   btc: [number, number][];
   agents: Record<string, [number, number][]>;
+  mix?: [number, number][];
   day_pnl: Record<string, number>;
   months: Record<string, { pnl: number; ret: number }>;
 }
@@ -185,6 +239,31 @@ export interface Meta {
   account: string;
   tax: { filing_status: string; other_income: number; state: string; state_name: string; state_rate: number };
   states: { code: string; name: string; rate: number }[];
+}
+
+export interface BacktestStats {
+  final: number;
+  total: number;
+  cagr: number;
+  max_dd: number;
+  sharpe: number;
+  years: Record<string, number>;
+}
+
+/** /api/backtest: hypothetical long backtest, BTC held alone vs the what-if split. */
+export interface Backtest {
+  available: boolean;
+  generated: string;
+  note: string;
+  balance: number;
+  start: number;
+  end: number;
+  btc_share: number;
+  rebalance_months: number;
+  rebalance: string;
+  series: { btc: [number, number][]; mix: [number, number][]; quorum: [number, number][] };
+  stats: { btc: BacktestStats; mix: BacktestStats; quorum: BacktestStats };
+  crashes: { from: number; to: number; btc: number; mix: number; quorum: number }[];
 }
 
 export interface Candle {

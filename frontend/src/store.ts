@@ -12,7 +12,7 @@ interface State {
   news: News | null;
   candle: { symbol: string; tf: number; c: Candle } | null;
   // view
-  view: "performance" | "chart";
+  view: View;
   symbol: string;
   tf: number;
   logFilter: string;
@@ -22,6 +22,11 @@ interface State {
 
 let ws: WebSocket | null = null;
 let retry = 1000;
+
+export type View = "performance" | "chart" | "backtest";
+// ?view=backtest (or chart) picks the main chart on load, e.g. for an OBS browser source
+const urlView = new URLSearchParams(location.search).get("view");
+const initialView: View = urlView === "chart" || urlView === "backtest" ? urlView : "performance";
 
 export const useStore = create<State>((set) => ({
   connected: false,
@@ -33,7 +38,7 @@ export const useStore = create<State>((set) => ({
   oracle: null,
   news: null,
   candle: null,
-  view: "performance",
+  view: initialView,
   symbol: "BTC-USD",
   tf: 3600,
   logFilter: "all",

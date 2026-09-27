@@ -20,13 +20,13 @@ export function Log() {
   let lastDay = "";
   return (
     <section className="card flex flex-col min-h-0 h-full">
-      <div className="flex items-center gap-1 px-3 h-9 border-b border-line shrink-0">
-        <span className="label mr-2">Activity</span>
+      <div className="flex items-center gap-0.5 px-3 h-9 border-b border-line shrink-0 min-w-0 overflow-hidden">
+        <span className="label mr-1.5">Activity</span>
         {FILTERS.map((f) => (
           <button
             key={f}
             onClick={() => set({ logFilter: f })}
-            className={clsx("text-[10.5px] px-1.5 py-0.5 rounded", filter === f ? "bg-line2 text-hi" : "text-mute hover:text-soft")}
+            className={clsx("text-[10.5px] px-1 py-0.5 rounded shrink-0", filter === f ? "bg-line2 text-hi" : "text-mute hover:text-soft")}
           >
             {f === "all" ? "All" : f === "fills" ? "Fills" : f.charAt(0) + f.slice(1).toLowerCase()}
           </button>

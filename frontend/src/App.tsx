@@ -5,6 +5,8 @@ import { AccountStrip } from "./components/AccountStrip";
 import { Agents } from "./components/Agents";
 import { PerformanceChart } from "./components/PerformanceChart";
 import { PriceChart } from "./components/PriceChart";
+import { BacktestChart } from "./components/BacktestChart";
+import { Toasts, WeeklyOverlay } from "./components/Toasts";
 import { Positions } from "./components/Positions";
 import { Log } from "./components/Log";
 import { Side } from "./components/Side";
@@ -36,7 +38,7 @@ export default function App() {
       <TopBar />
       <main className="flex-1 min-h-0 flex flex-col gap-3 p-3">
         <AccountStrip />
-        <div className="flex-1 min-h-0 grid grid-cols-[minmax(0,1fr)_380px] gap-3">
+        <div className="flex-1 min-h-0 grid grid-cols-[minmax(0,1fr)_340px] gap-3">
           <div className="min-h-0 flex flex-col gap-3">
             <Agents />
             <div className="flex-1 min-h-0 grid grid-rows-[minmax(220px,1.05fr)_minmax(180px,1fr)] gap-3">
@@ -44,7 +46,7 @@ export default function App() {
               <Positions />
             </div>
           </div>
-          <div className="min-h-0 grid grid-rows-[minmax(0,1.15fr)_minmax(0,1fr)] gap-3">
+          <div className="min-h-0 min-w-0 grid grid-rows-[minmax(0,1.15fr)_minmax(0,1fr)] gap-3">
             <Log />
             <Side />
           </div>
@@ -67,9 +69,9 @@ function ChartCard() {
     <section className="card flex flex-col min-h-0">
       <div className="flex items-center gap-3 px-3 h-9 border-b border-line shrink-0">
         <div className="flex gap-0.5">
-          {(["performance", "chart"] as const).map((v) => (
+          {(["performance", "chart", "backtest"] as const).map((v) => (
             <button key={v} onClick={() => set({ view: v })} className={clsx("text-[11px] px-2 py-0.5 rounded", view === v ? "bg-line2 text-hi" : "text-mute hover:text-soft")}>
-              {v === "performance" ? "Performance" : "Market"}
+              {v === "performance" ? "Performance" : v === "chart" ? "Market" : "Backtest"}
             </button>
           ))}
         </div>
@@ -114,6 +116,11 @@ function ChartCard() {
         <div className={clsx("absolute inset-0", view !== "chart" && "invisible")}>
           <PriceChart symbol={symbol} tf={tf} />
         </div>
+        <div className={clsx("absolute inset-0", view !== "backtest" && "invisible")}>
+          <BacktestChart />
+        </div>
+        <Toasts />
+        <WeeklyOverlay />
       </div>
     </section>
   );

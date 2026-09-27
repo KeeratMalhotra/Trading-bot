@@ -88,23 +88,59 @@ Prices are always live Coinbase prices. If Coinbase can't be reached at startup,
 3. **OBS:** add a Browser Source at `http://localhost:8000`, 1920×1080, and tick *Refresh browser when scene becomes active*. The page reconnects by itself after a server restart.
 4. **Check on it:** `curl localhost:8000/api/health` shows the feed, forecaster, desk, news desk and funding recorder status.
 5. **Labelling:** keep the **PAPER TRADING** badge and put a line in the stream description, for example "Paper trading: simulated orders on live Coinbase prices. Not financial advice." Viewers may act on what they see.
-6. **Starting over:** stop the app and delete `backend/data/botbattle.sqlite3` (Docker: `docker compose down -v`, which also deletes the downloaded history, so the next start takes ~10 minutes again).
+6. **Closing and reopening:** the account is saved every 10 seconds and on shutdown, and restored on the next start. That covers cash, positions, stops and history. While it's closed, nothing is simulated: no trades, no stops, and no funding for those hours. A stop crossed in the meantime fills at the price when it reopens. ORACLE retrains for a minute or two after each start before opening new trades.
+7. **Changing the starting amount / starting over:** `TEAM_BALANCE` only applies to a new account. To start over, stop the app, set `TEAM_BALANCE`, and delete the saved account. The downloaded history is kept, so it's trading again within minutes:
+   - `./run.sh`: `rm -f backend/data/botbattle.sqlite3*`
+   - Docker: `docker compose stop && docker compose run --rm botbattle sh -c 'rm -f /data/botbattle.sqlite3*' && docker compose up -d`
 
 ### Configuration (`.env`)
 
 | Variable | Default | |
 |---|---|---|
-| `TEAM_BALANCE` | `30000` | Starting account value (USD) |
+| `TEAM_BALANCE` | `30000` | Starting account value (USD). Only used when a new account is created; see "Changing the starting amount" above. Paper fills don't model order-book depth, so very large amounts (e.g. $1M) look better on paper than they would live |
 | `TAX_FILING_STATUS` | `single` | `single` or `mfj` |
 | `TAX_OTHER_INCOME` | `75000` | Sets your tax bracket |
 | `TAX_STATE` | `XX` | Two-letter state code (`XX` = federal only) |
 | `ADMIN_TOKEN` | *(empty)* | Protects the settings API. Set it if anyone else can reach the dashboard |
 | `CASH_APY` | `0` | Yield on idle cash (cash not needed as futures margin), e.g. `0.0375`. Only set it if your real account would earn it (e.g. Coinbase One with idle cash held as USDC). It's shown on the dashboard and counted as ordinary income in the tax estimate |
 | `MARKET_SOURCE` | `auto` | `auto`/`coinbase` = live Coinbase prices; `sim` = offline simulator for demos |
+| `MIX_BTC_SHARE` | `0.4` | Dashboard what-if: the share of the starting amount held in BTC instead (bought once, 0.6% fee). `0` hides it. Display only |
+| `MIX_REBALANCE` | `yearly` | How often it goes back to the split (0.6% fee on the BTC traded): `yearly` (every Jan 1), `6m` (Jan 1 and Jul 1), `quarterly`, `monthly`, `2y`, any number of months, or `never` (buy and hold). Applies to the live box and the Backtest tab |
 
 ## Dashboard
 
-- **Account:** net liquidation value, month-to-date and today's P&L, since-inception return, net/gross exposure, and margin in use.
+- **Account:** net liquidation value, month-to-date and today's P&L, since-inception return, and margin in use.
+- **What if (60% QUORUM + 40% BTC):** what the same starting amount would be worth with 40% held in BTC instead, shown as a box with a mini chart and as a gold line on the performance chart. It's display only and never affects trading. Set the split with `MIX_BTC_SHARE`, and `MIX_REBALANCE` for rebalancing.
+- **Backtest tab:** $100k from Jan 2017 in BTC alone vs the same QUORUM + BTC split, on a log scale, with how each did during BTC's two big crashes. It's clearly labelled as a hypothetical backtest. For OBS, `http://localhost:8000/?view=backtest` opens straight on this tab.
+
+### Stream features (display only: none of this changes trading)
+
+- **Agents that talk:** each agent card on the Desk ends with its latest line, in character, built only from real numbers:
+  - **ATLAS**, the calm veteran: "Day 12 of the trend. Holding BTC. Wake me when it breaks."
+  - **ORACLE**, the data scientist: "Target hit on SOL. +1.8R, +5.2%. The model sends its regards."
+  - **NOVA**, the copycat: "Borrowing ORACLE's SUI short. Why reinvent the wheel?"
+
+  Lines update on every decision, trade and weekly result, and at least every 3 hours otherwise.
+- **Team jerseys:** a weekly race between the agents, by return on the capital each had when the week started. It shows each agent's rank (#1 in gold), weeks won this season (trophy count), and the full table in the side panel's **Weekly** tab. To show the fans' split, run a poll on Twitch or YouTube and enter the result:
+  `curl -X POST localhost:8000/api/jerseys -H 'content-type: application/json' -H "x-admin-token: $ADMIN_TOKEN" -d '{"ATLAS":45,"ORACLE":35,"NOVA":20}'`
+- **Weekly earnings call:** when a week closes (Sunday midnight, New York time), a report takes over the chart for two minutes. It covers:
+  - each agent's grade (A ≥ +2% · B ≥ +0.5% · C ±0.5% · D ≥ −2% · F) with its own comment;
+  - the winner, and account vs BTC;
+  - the best and worst trade, and trades closed;
+  - desk moves, the season table, and how the fans' picks did.
+
+  Past reports stay in the **Weekly** tab.
+- **Trade cards:** every closed trade slides in over the chart's lower-left corner. That's each ORACLE trade (target, stop or 14-day end, with R), and each ATLAS/NOVA position from open to full close: entry → exit, P&L, return and time held. At most two show at once; the rest queue.
+- **Milestones:**
+  - new all-time highs (each at least 3% above the last one announced);
+  - up 5/10/25/50/100%… since the start;
+  - 5, 7, 10… green days in a row;
+  - the 1st, 10th, 25th, 100th… trade closed;
+  - 1/7/30/100/365 days on air.
+
+  An account that was already running doesn't get a burst of old ones.
+
+Trade cards, milestones and weekly calls also appear in the Activity log, and everything is saved with the account.
 - **Desk:** each agent's current activity, allocation, capital, % invested, and P&L today, this month and since start. Click an agent to filter the activity log.
 - **Performance:** account vs BTC buy & hold. **Market:** candles with the team's fills, average prices and ORACLE's stops and targets.
 - **Positions:** spot and futures, contracts, average price, mark, unrealized P&L and funding, each position's exit plan, and which agents hold it.
@@ -143,7 +179,20 @@ python -m app.ml.research --kind reg --tp 4 --sl 2 --horizon 336 --retrain-days 
 python -m app.ml.research --kind reg --side short --tp 4 --sl 2 --horizon 336 --retrain-days 60 --tag _Sr --oos-start 2016-09-01
 python -m app.team.research --spot-maker 0.006 --spot-taker 0.012 --start 2017-01-01
 python -m app.team.replay --start 2017-01-01 --end 2022-01-01 --balance 30000
+python -m app.team.mixbacktest build --start 2017-01-01   # refresh the Backtest tab's data (app/team/backtest_mix.json)
+python -m app.team.mixbacktest grid                       # every BTC share x rebalancing period from that file
 ```
+
+**QUORUM + BTC, $100k from Jan 2017** (hypothetical, from `mixbacktest grid`; BTC alone ended at $8.62M, worst drop 84%, 4 losing years):
+
+| Split, rebalanced yearly | Final | Beats BTC | Losing years | 2018 | 2022 | Worst drop |
+|---|---|---|---|---|---|---|
+| 90% QUORUM / 10% BTC | $4.37M | no | 0 | +1% | +24% | 47% |
+| 70% QUORUM / 30% BTC | $7.89M | no | 1 | −15% | +5% | 52% |
+| **60% QUORUM / 40% BTC** | **$9.70M** | yes | 2 | −24% | −5% | 54% |
+| 50% QUORUM / 50% BTC | $11.30M | yes | 3 | −32% | −15% | 56% |
+
+No split beat BTC without losing years: beating BTC took at least 40% in BTC, and that much BTC lost money in 2018. Beating BTC is also fragile. With 60/40, only 2 of the 12 possible yearly rebalancing months beat BTC; Jan 1 happens to be one of them. From other start months between 2017 and 2024, 60/40 beat BTC about half the time. Rebalancing every 6 months did worse than yearly for every split.
 
 ## Going live (not built yet)
 

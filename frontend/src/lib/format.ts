@@ -9,7 +9,8 @@ export function usd(x: number | null | undefined, opts: { sign?: boolean; whole?
 }
 
 export function pct(x: number | null | undefined, digits = 2, sign = true): string {
-  const v = Number.isFinite(x as number) ? (x as number) * 100 : 0;
+  let v = Number.isFinite(x as number) ? (x as number) * 100 : 0;
+  if (Number(Math.abs(v).toFixed(digits)) === 0) v = 0; // no "−0.0%"
   const s = Math.abs(v).toFixed(digits) + "%";
   if (!sign) return (v < 0 ? "−" : "") + s;
   return (v > 0 ? "+" : v < 0 ? "−" : "") + s;

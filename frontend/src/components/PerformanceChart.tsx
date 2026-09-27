@@ -4,6 +4,8 @@ import clsx from "clsx";
 import { useStore } from "../store";
 import { chartOptions } from "../lib/chart";
 
+const MIX_COLOR = "#e3b35b";
+
 const RANGES: { id: string; label: string; days: number }[] = [
   { id: "1W", label: "1W", days: 7 },
   { id: "1M", label: "1M", days: 30 },
@@ -11,16 +13,18 @@ const RANGES: { id: string; label: string; days: number }[] = [
   { id: "ALL", label: "All", days: 100000 },
 ];
 
-/** Account value vs holding BTC, both rebased to 0% at the start of the range. */
+/** Account value vs holding BTC (and the what-if split, if enabled), all rebased to 0% at the start of the range. */
 export function PerformanceChart() {
   const el = useRef<HTMLDivElement>(null);
   const chart = useRef<IChartApi | null>(null);
   const team = useRef<ISeriesApi<"Area"> | null>(null);
   const btc = useRef<ISeriesApi<"Line"> | null>(null);
+  const mixS = useRef<ISeriesApi<"Line"> | null>(null);
   const history = useStore((s) => s.history);
   const live = useStore((s) => s.live);
   const [range, setRange] = useState("ALL");
-  const [stats, setStats] = useState<{ team: number; btc: number } | null>(null);
+  const [stats, setStats] = useState<{ team: number; btc: number; mix: number | null } | null>(null);
+  const mix = live?.account.mix;
 
   useEffect(() => {
     if (!el.current) return;
@@ -38,6 +42,12 @@ export function PerformanceChart() {
       color: "#5b626d",
       lineWidth: 1,
       lineStyle: LineStyle.Dashed,
+      priceLineVisible: false,
+      priceFormat: fmt,
+    });
+    mixS.current = c.addSeries(LineSeries, {
+      color: MIX_COLOR,
+      lineWidth: 2,
       priceLineVisible: false,
       priceFormat: fmt,
     });
@@ -69,10 +79,18 @@ export function PerformanceChart() {
     };
     const te = rebase(e);
     const tb = rebase(b);
+    const m = (history.mix ?? []).filter(([t]) => t >= t0);
+    if (live?.account.mix) m.push([Math.floor(live.ts), live.account.mix.value]);
+    const tm = live?.account.mix ? rebase(m) : [];
     team.current.setData(te);
     btc.current.setData(tb);
+    mixS.current?.setData(tm);
     chart.current?.timeScale().fitContent();
-    setStats(te.length && tb.length ? { team: te[te.length - 1].value, btc: tb[tb.length - 1].value } : null);
+    setStats(
+      te.length && tb.length
+        ? { team: te[te.length - 1].value, btc: tb[tb.length - 1].value, mix: tm.length ? tm[tm.length - 1].value : null }
+        : null,
+    );
   }, [history, range, live?.ts]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
@@ -88,6 +106,17 @@ export function PerformanceChart() {
           <span className="text-soft">BTC buy &amp; hold</span>
           {stats && <span className={clsx("num", stats.btc >= 0 ? "text-up" : "text-down")}>{`${stats.btc >= 0 ? "+" : ""}${stats.btc.toFixed(2)}%`}</span>}
         </span>
+        {mix && (
+          <span className="flex items-center gap-1.5">
+            <span className="w-3 h-[2px]" style={{ background: MIX_COLOR }} />
+            <span className="text-soft">
+              {100 - Math.round(mix.btc_share * 100)}% QUORUM + {Math.round(mix.btc_share * 100)}% BTC
+            </span>
+            {stats?.mix != null && (
+              <span className={clsx("num", stats.mix >= 0 ? "text-up" : "text-down")}>{`${stats.mix >= 0 ? "+" : ""}${stats.mix.toFixed(2)}%`}</span>
+            )}
+          </span>
+        )}
       </div>
       <div className="absolute top-1.5 right-16 z-10 flex gap-0.5">
         {RANGES.map((r) => (
