@@ -13,165 +13,130 @@ import {
   type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
-import { useStore, botColor, botName } from "../store";
-import { baseChartOptions } from "../lib/chart";
+import { useStore } from "../store";
+import { chartOptions } from "../lib/chart";
 import type { Candle } from "../types";
-import { usd } from "../lib/format";
 
-function precisionFor(p: number) {
-  if (p >= 1000) return 2;
-  if (p >= 10) return 2;
-  if (p >= 1) return 4;
-  return 5;
-}
+const prec = (p: number) => (p >= 10 ? 2 : p >= 1 ? 4 : 5);
 
 export function PriceChart({ symbol, tf }: { symbol: string; tf: number }) {
   const el = useRef<HTMLDivElement>(null);
   const chart = useRef<IChartApi | null>(null);
   const candles = useRef<ISeriesApi<"Candlestick"> | null>(null);
-  const volume = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const vol = useRef<ISeriesApi<"Histogram"> | null>(null);
   const markers = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const lines = useRef<Map<string, IPriceLine>>(new Map());
-  const range = useRef<{ first: number; last: number }>({ first: 0, last: 0 });
-  const [loaded, setLoaded] = useState(0);
   const levels = useRef<number[]>([]);
-
+  const first = useRef(0);
+  const [loaded, setLoaded] = useState(0);
   const candle = useStore((s) => s.candle);
-  const trades = useStore((s) => s.trades);
-  const positions = useStore((s) => s.live?.positions ?? []);
+  const fills = useStore((s) => s.fills);
+  const live = useStore((s) => s.live);
   const subscribe = useStore((s) => s.subscribe);
 
   useEffect(() => {
     if (!el.current) return;
-    const c = createChart(el.current, {
-      ...baseChartOptions,
-      rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.1, bottom: 0.22 } },
-    });
-    chart.current = c;
+    const c = createChart(el.current, { ...chartOptions, rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.08, bottom: 0.2 } } });
     candles.current = c.addSeries(CandlestickSeries, {
-      upColor: "#22c55e",
-      downColor: "#f43f5e",
+      upColor: "#3ecf8e",
+      downColor: "#f0616d",
       borderVisible: false,
-      wickUpColor: "rgba(34,197,94,0.7)",
-      wickDownColor: "rgba(244,63,94,0.7)",
-      // keep every open trade's entry / stop / target on screen
+      wickUpColor: "rgba(62,207,142,0.6)",
+      wickDownColor: "rgba(240,97,109,0.6)",
       autoscaleInfoProvider: (orig: () => { priceRange: { minValue: number; maxValue: number } } | null) => {
         const r = orig();
-        const lv = levels.current;
-        if (!r || !lv.length) return r;
-        return { ...r, priceRange: { minValue: Math.min(r.priceRange.minValue, ...lv), maxValue: Math.max(r.priceRange.maxValue, ...lv) } };
+        if (!r || !levels.current.length) return r;
+        return { ...r, priceRange: { minValue: Math.min(r.priceRange.minValue, ...levels.current), maxValue: Math.max(r.priceRange.maxValue, ...levels.current) } };
       },
     });
-    volume.current = c.addSeries(HistogramSeries, { priceScaleId: "vol", priceFormat: { type: "volume" }, lastValueVisible: false, priceLineVisible: false });
-    c.priceScale("vol").applyOptions({ scaleMargins: { top: 0.84, bottom: 0 } });
+    vol.current = c.addSeries(HistogramSeries, { priceScaleId: "v", priceFormat: { type: "volume" }, lastValueVisible: false, priceLineVisible: false });
+    c.priceScale("v").applyOptions({ scaleMargins: { top: 0.86, bottom: 0 } });
     markers.current = createSeriesMarkers(candles.current, []);
+    chart.current = c;
     return () => {
       c.remove();
-      chart.current = null;
       lines.current.clear();
     };
   }, []);
 
-  // load history on symbol/timeframe change
   useEffect(() => {
-    let cancelled = false;
+    let cancel = false;
     subscribe(symbol, tf);
     fetch(`/api/candles?symbol=${symbol}&tf=${tf}&limit=300`)
       .then((r) => r.json())
       .then((rows: Candle[]) => {
-        if (cancelled || !candles.current || !volume.current) return;
-        const last = rows[rows.length - 1]?.close ?? 1;
-        const prec = precisionFor(last);
-        candles.current.applyOptions({ priceFormat: { type: "price", precision: prec, minMove: 1 / 10 ** prec } });
+        if (cancel || !candles.current || !vol.current || !rows.length) return;
+        const p = prec(rows[rows.length - 1].close);
+        candles.current.applyOptions({ priceFormat: { type: "price", precision: p, minMove: 1 / 10 ** p } });
         candles.current.setData(rows.map((c) => ({ time: c.time as UTCTimestamp, open: c.open, high: c.high, low: c.low, close: c.close })));
-        volume.current.setData(
-          rows.map((c) => ({
-            time: c.time as UTCTimestamp,
-            value: c.volume,
-            color: c.close >= c.open ? "rgba(34,197,94,0.25)" : "rgba(244,63,94,0.25)",
-          })),
-        );
-        range.current = { first: rows[0]?.time ?? 0, last: rows[rows.length - 1]?.time ?? 0 };
-        chart.current?.timeScale().setVisibleLogicalRange({ from: Math.max(0, rows.length - 140), to: rows.length + 6 });
+        vol.current.setData(rows.map((c) => ({ time: c.time as UTCTimestamp, value: c.volume, color: c.close >= c.open ? "rgba(62,207,142,0.18)" : "rgba(240,97,109,0.18)" })));
+        first.current = rows[0].time;
+        chart.current?.timeScale().setVisibleLogicalRange({ from: Math.max(0, rows.length - 150), to: rows.length + 5 });
         for (const l of lines.current.values()) candles.current.removePriceLine(l);
         lines.current.clear();
         setLoaded((n) => n + 1);
       });
     return () => {
-      cancelled = true;
+      cancel = true;
     };
   }, [symbol, tf, subscribe]);
 
-  // live candle
   useEffect(() => {
     if (!candle || candle.symbol !== symbol || candle.tf !== tf || !candles.current) return;
     const c = candle.c;
-    if (c.time < range.current.last) return;
-    range.current.last = c.time;
     candles.current.update({ time: c.time as UTCTimestamp, open: c.open, high: c.high, low: c.low, close: c.close });
-    volume.current?.update({
-      time: c.time as UTCTimestamp,
-      value: c.volume,
-      color: c.close >= c.open ? "rgba(34,197,94,0.25)" : "rgba(244,63,94,0.25)",
-    });
+    vol.current?.update({ time: c.time as UTCTimestamp, value: c.volume, color: c.close >= c.open ? "rgba(62,207,142,0.18)" : "rgba(240,97,109,0.18)" });
   }, [candle, symbol, tf]);
 
-  // trade markers
-  const markerData = useMemo(() => {
-    const bucket = (ts: number) => Math.floor(ts / tf) * tf;
+  const mk = useMemo(() => {
     const out: SeriesMarker<Time>[] = [];
-    for (const t of trades) {
-      if (t.symbol !== symbol) continue;
-      const col = botColor(t.bot);
-      out.push({ time: bucket(t.opened) as UTCTimestamp, position: "belowBar", shape: "arrowUp", color: col, text: `${botName(t.bot)[0]} BUY` });
+    for (const f of fills) {
+      if (f.symbol !== symbol) continue;
+      const t = Math.floor(f.ts / tf) * tf;
       out.push({
-        time: bucket(t.closed) as UTCTimestamp,
-        position: "aboveBar",
-        shape: "arrowDown",
-        color: t.net >= 0 ? "#22c55e" : "#f43f5e",
-        text: `${botName(t.bot)[0]} ${usd(t.net, { sign: true })}`,
+        time: t as UTCTimestamp,
+        position: f.side === "buy" ? "belowBar" : "aboveBar",
+        shape: f.side === "buy" ? "arrowUp" : "arrowDown",
+        color: f.side === "buy" ? "#3ecf8e" : "#f0616d",
+        text: f.venue === "perp" ? `${f.side === "buy" ? "B" : "S"} ${f.contracts}` : f.side === "buy" ? "B" : "S",
       });
     }
-    for (const p of positions) {
-      if (p.symbol !== symbol || p.status === "opening" || p.bot === "hodl") continue;
-      out.push({ time: bucket(p.opened) as UTCTimestamp, position: "belowBar", shape: "arrowUp", color: botColor(p.bot), text: `${botName(p.bot)[0]} BUY` });
-    }
     return out.sort((a, b) => (a.time as number) - (b.time as number));
-  }, [trades, positions, symbol, tf]);
+  }, [fills, symbol, tf]);
 
   useEffect(() => {
-    const { first } = range.current;
-    if (!first) return;
-    markers.current?.setMarkers(markerData.filter((m) => (m.time as number) >= first));
-  }, [markerData, loaded, symbol]);
+    if (!first.current) return;
+    markers.current?.setMarkers(mk.filter((m) => (m.time as number) >= first.current));
+  }, [mk, loaded]);
 
-  // position price lines (entry / stop / target)
+  // position levels: average price, and ORACLE stops / targets
   useEffect(() => {
     const s = candles.current;
-    if (!s) return;
+    if (!s || !live) return;
     const want = new Map<string, { price: number; color: string; title: string; style: LineStyle }>();
-    for (const p of positions) {
-      if (p.symbol !== symbol) continue;
-      const n = botName(p.bot);
-      want.set(`${p.id}:e`, { price: p.entry, color: botColor(p.bot), title: `${n} ENTRY`, style: LineStyle.Dashed });
-      want.set(`${p.id}:s`, { price: p.stop, color: "#f43f5e", title: `${n} ${p.trailing ? "TRAIL" : "STOP"}`, style: LineStyle.Dotted });
-      if (p.target != null) want.set(`${p.id}:t`, { price: p.target, color: "#22c55e", title: `${n} TARGET`, style: LineStyle.Dotted });
-      if (p.hard_stop != null) want.set(`${p.id}:h`, { price: p.hard_stop, color: "rgba(244,63,94,0.45)", title: `${n} EMERGENCY`, style: LineStyle.Dotted });
+    for (const p of live.positions) {
+      if (!p.instrument.startsWith(symbol.split("-")[0])) continue;
+      want.set(`${p.key}:avg`, { price: p.avg, color: "#8a919c", title: `${p.venue === "perp" ? "PERP" : "SPOT"} ${p.side.toUpperCase()} AVG`, style: LineStyle.Dashed });
     }
+    for (const t of live.oracle.open) {
+      if (t.symbol !== symbol) continue;
+      want.set(`${t.id}:s`, { price: t.stop, color: "#f0616d", title: "ORACLE STOP", style: LineStyle.Dotted });
+      want.set(`${t.id}:t`, { price: t.target, color: "#3ecf8e", title: "ORACLE TARGET", style: LineStyle.Dotted });
+    }
+    levels.current = [...want.entries()].filter(([k]) => !k.endsWith(":avg")).map(([, v]) => v.price);
     for (const [k, l] of lines.current) {
       if (!want.has(k)) {
         s.removePriceLine(l);
         lines.current.delete(k);
       }
     }
-    levels.current = [...want.entries()].filter(([k]) => !k.endsWith(":h")).map(([, v]) => v.price);
     for (const [k, v] of want) {
-      const opts = { price: v.price, color: v.color, title: v.title, lineStyle: v.style, lineWidth: 1 as const, axisLabelVisible: true };
+      const o = { price: v.price, color: v.color, title: v.title, lineStyle: v.style, lineWidth: 1 as const, axisLabelVisible: true };
       const l = lines.current.get(k);
-      if (l) l.applyOptions(opts);
-      else lines.current.set(k, s.createPriceLine(opts));
+      if (l) l.applyOptions(o);
+      else lines.current.set(k, s.createPriceLine(o));
     }
-  }, [positions, symbol, loaded]);
+  }, [live, symbol, loaded]);
 
   return <div ref={el} className="absolute inset-0" />;
 }

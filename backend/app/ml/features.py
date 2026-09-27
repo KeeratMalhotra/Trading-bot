@@ -239,9 +239,13 @@ def panel_features(base_names: list[str], X: np.ndarray, raw: dict[str, np.ndarr
 
 # -------------------------------------------------------------------- labels
 def triple_barrier(s: Series, dvol: np.ndarray, horizon: int = HORIZON,
-                   tp_mult: float = TP_MULT, sl_mult: float = SL_MULT):
-    """Returns y (1/0, NaN if unknown), exit return (fraction), bars held."""
+                   tp_mult: float = TP_MULT, sl_mult: float = SL_MULT, side: str = "long"):
+    """Returns y (1/0, NaN if unknown), exit return (fraction), bars held.
+
+    side="short" mirrors the trade: profit when price falls (returns are the SHORT's returns)."""
     c, h, l = s.c, s.h, s.l
+    if side == "short":  # mirror prices: a falling market becomes a rising one
+        c, h, l = 1.0 / c, 1.0 / l, 1.0 / h
     n = len(c)
     tp = c * (1 + tp_mult * dvol)
     sl = c * (1 - sl_mult * dvol)

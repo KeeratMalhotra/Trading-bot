@@ -12,6 +12,11 @@ STATIC_DIR = Path(os.getenv("STATIC_DIR", Path(__file__).resolve().parents[2] / 
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")  # empty = controls open (fine on localhost)
 MARKET_SOURCE = os.getenv("MARKET_SOURCE", "auto")  # auto | coinbase | sim
 STARTING_BALANCE = float(os.getenv("STARTING_BALANCE", "10000"))
+TEAM_BALANCE = float(os.getenv("TEAM_BALANCE", "30000"))  # QUORUM team account
+# US tax profile used for the estimates on the dashboard
+TAX_FILING_STATUS = os.getenv("TAX_FILING_STATUS", "single")   # single | mfj
+TAX_OTHER_INCOME = float(os.getenv("TAX_OTHER_INCOME", "75000"))
+TAX_STATE = os.getenv("TAX_STATE", "XX")                       # two-letter code, XX = federal only
 # Trading mode. Only "paper" is wired up. "live" additionally requires
 # LIVE_TRADING_ACK=I_UNDERSTAND_REAL_MONEY_IS_AT_RISK and Coinbase CDP keys.
 TRADING_MODE = os.getenv("TRADING_MODE", "paper")

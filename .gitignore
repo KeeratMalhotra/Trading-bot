@@ -1,6 +1,6 @@
 __pycache__/
 *.pyc
-backend/.venv/
+backend/.venv
 backend/data/
 backend/.bt-cache/
 backend/*.log

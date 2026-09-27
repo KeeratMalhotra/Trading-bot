@@ -1,32 +1,24 @@
-import { ColorType, CrosshairMode, LineStyle, type DeepPartial, type ChartOptions, type Time } from "lightweight-charts";
+import { ColorType, CrosshairMode, LineStyle, type ChartOptions, type DeepPartial, type Time } from "lightweight-charts";
 
-const etFull = new Intl.DateTimeFormat("en-US", {
-  timeZone: "America/New_York",
-  month: "short",
-  day: "numeric",
-  hour: "numeric",
-  minute: "2-digit",
-});
-const etTick = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" });
+const etFull = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
+const etTick = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false });
 const etDay = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", month: "short", day: "numeric" });
+const etMonth = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", month: "short", year: "2-digit" });
 
-export const baseChartOptions: DeepPartial<ChartOptions> = {
+export const chartOptions: DeepPartial<ChartOptions> = {
   autoSize: true,
   layout: {
     background: { type: ColorType.Solid, color: "transparent" },
-    textColor: "#6b7686",
+    textColor: "#5b626d",
     fontFamily: "JetBrains Mono Variable, ui-monospace, monospace",
-    fontSize: 11,
+    fontSize: 10,
     attributionLogo: false,
   },
-  grid: {
-    vertLines: { color: "rgba(255,255,255,0.03)" },
-    horzLines: { color: "rgba(255,255,255,0.04)" },
-  },
+  grid: { vertLines: { visible: false }, horzLines: { color: "rgba(255,255,255,0.035)" } },
   crosshair: {
     mode: CrosshairMode.Normal,
-    vertLine: { color: "rgba(255,255,255,0.15)", style: LineStyle.Dashed, labelBackgroundColor: "#1c2330" },
-    horzLine: { color: "rgba(255,255,255,0.15)", style: LineStyle.Dashed, labelBackgroundColor: "#1c2330" },
+    vertLine: { color: "rgba(255,255,255,0.12)", style: LineStyle.Solid, labelBackgroundColor: "#23272e" },
+    horzLine: { color: "rgba(255,255,255,0.12)", style: LineStyle.Solid, labelBackgroundColor: "#23272e" },
   },
   rightPriceScale: { borderVisible: false },
   timeScale: {
@@ -35,10 +27,9 @@ export const baseChartOptions: DeepPartial<ChartOptions> = {
     secondsVisible: false,
     tickMarkFormatter: (t: Time, type: number) => {
       const d = new Date((t as number) * 1000);
-      return type <= 2 ? etDay.format(d) : etTick.format(d);
+      if (type <= 1) return etMonth.format(d);
+      return type === 2 ? etDay.format(d) : etTick.format(d);
     },
   },
-  localization: {
-    timeFormatter: (t: Time) => etFull.format(new Date((t as number) * 1000)),
-  },
+  localization: { timeFormatter: (t: Time) => etFull.format(new Date((t as number) * 1000)) },
 };
