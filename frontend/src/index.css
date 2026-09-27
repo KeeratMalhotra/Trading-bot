@@ -3,20 +3,17 @@
 @theme {
   --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
-  --color-ink-950: #05070a;
-  --color-ink-900: #0a0d12;
-  --color-ink-850: #0e1218;
-  --color-ink-800: #131821;
-  --color-ink-700: #1c2330;
-  --color-ink-600: #2a3342;
-  --color-ink-400: #6b7686;
-  --color-ink-300: #9aa4b2;
-  --color-ink-200: #c9d0da;
-  --color-up: #22c55e;
-  --color-down: #f43f5e;
-  --color-low: #34d399;
-  --color-medium: #fbbf24;
-  --color-high: #f43f5e;
+  --color-bg: #08090b;
+  --color-panel: #0d0f12;
+  --color-line: #1a1d22;
+  --color-line2: #23272e;
+  --color-mute: #5b626d;
+  --color-soft: #8a919c;
+  --color-text: #d7dbe0;
+  --color-hi: #f4f6f8;
+  --color-up: #3ecf8e;
+  --color-down: #f0616d;
+  --color-accent: #e8e8e8;
 }
 
 html,
@@ -26,105 +23,109 @@ body,
 }
 
 body {
-  background:
-    radial-gradient(1200px 600px at 10% -10%, rgba(52, 211, 153, 0.06), transparent 60%),
-    radial-gradient(1000px 500px at 110% 10%, rgba(244, 63, 94, 0.05), transparent 60%),
-    var(--color-ink-950);
-  color: var(--color-ink-200);
+  background: var(--color-bg);
+  color: var(--color-text);
   font-family: var(--font-sans);
+  font-size: 13px;
   -webkit-font-smoothing: antialiased;
-  overflow-x: hidden;
+  font-feature-settings: "cv11", "ss01";
 }
 
 .num {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.01em;
 }
 
-.panel {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0.01));
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 1rem;
-  backdrop-filter: blur(8px);
+.card {
+  background: var(--color-panel);
+  border: 1px solid var(--color-line);
+  border-radius: 10px;
 }
 
-.panel-title {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.14em;
+.label {
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--color-ink-400);
+  color: var(--color-mute);
 }
 
-.scroll-thin {
+.scroll {
   scrollbar-width: thin;
-  scrollbar-color: #2a3342 transparent;
+  scrollbar-color: #23272e transparent;
 }
 
-@keyframes pulse-dot {
-  0%,
+table.tbl {
+  width: 100%;
+  border-collapse: collapse;
+}
+table.tbl th {
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-mute);
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--color-line);
+  position: sticky;
+  top: 0;
+  background: var(--color-panel);
+  z-index: 1;
+}
+table.tbl td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--color-line);
+  white-space: nowrap;
+}
+table.tbl tr:last-child td {
+  border-bottom: 0;
+}
+table.tbl tbody tr:hover td {
+  background: rgba(255, 255, 255, 0.015);
+}
+
+@keyframes tick-up {
+  0% {
+    color: var(--color-up);
+  }
   100% {
-    box-shadow: 0 0 0 0 currentColor;
-    opacity: 1;
-  }
-  50% {
-    box-shadow: 0 0 0 5px transparent;
-    opacity: 0.6;
+    color: inherit;
   }
 }
-.live-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 9999px;
-  background: currentColor;
-  animation: pulse-dot 1.6s ease-in-out infinite;
+@keyframes tick-down {
+  0% {
+    color: var(--color-down);
+  }
+  100% {
+    color: inherit;
+  }
+}
+.tick-up {
+  animation: tick-up 1.2s ease-out;
+}
+.tick-down {
+  animation: tick-down 1.2s ease-out;
 }
 
-@keyframes marquee {
+@keyframes fade-in {
   from {
-    transform: translateX(0);
+    opacity: 0;
+    transform: translateY(-3px);
   }
   to {
-    transform: translateX(-50%);
-  }
-}
-.marquee {
-  animation: marquee 60s linear infinite;
-}
-
-@keyframes flash-up {
-  0% {
-    background-color: rgba(34, 197, 94, 0.25);
-  }
-  100% {
-    background-color: transparent;
-  }
-}
-@keyframes flash-down {
-  0% {
-    background-color: rgba(244, 63, 94, 0.25);
-  }
-  100% {
-    background-color: transparent;
-  }
-}
-.flash-up {
-  animation: flash-up 0.9s ease-out;
-}
-.flash-down {
-  animation: flash-down 0.9s ease-out;
-}
-
-@keyframes glow {
-  0%,
-  100% {
-    opacity: 0.55;
-  }
-  50% {
     opacity: 1;
+    transform: none;
   }
 }
-.leader-glow {
-  animation: glow 2.4s ease-in-out infinite;
+.fade-in {
+  animation: fade-in 0.35s ease-out;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  display: inline-block;
 }

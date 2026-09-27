@@ -34,7 +34,8 @@ class Panel:
 
 
 def build_panel(store: HistoryStore, until: float | None = None, with_labels: bool = True,
-                tp_mult: float = TP_MULT, sl_mult: float = SL_MULT, horizon: int = HORIZON) -> Panel:
+                tp_mult: float = TP_MULT, sl_mult: float = SL_MULT, horizon: int = HORIZON,
+                side: str = "long") -> Panel:
     symbols = store.symbols
     segs = {s: store.series(s, until) for s in symbols}
     t0 = min(int(segs[s][0].t[0]) for s in symbols if segs[s])
@@ -59,7 +60,7 @@ def build_panel(store: HistoryStore, until: float | None = None, with_labels: bo
             for k in raw_all:
                 raw_all[k][idx, j] = raw[k]
             if with_labels:
-                yy, rr, hh, _ = triple_barrier(sg, raw["dvol"], horizon, tp_mult, sl_mult)
+                yy, rr, hh, _ = triple_barrier(sg, raw["dvol"], horizon, tp_mult, sl_mult, side)
                 y[idx, j], ret[idx, j], held[idx, j] = yy, rr, hh
     assert X is not None and names is not None
     btc = symbols.index("BTC-USD")

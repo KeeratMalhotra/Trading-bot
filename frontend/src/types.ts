@@ -1,245 +1,184 @@
-export type BotId = string;
+export type AgentId = "ATLAS" | "ORACLE" | "NOVA";
 
-export interface Price {
-  s: string;
-  p: number;
-  b: number;
-  a: number;
-  chg: number;
-  ts: number;
+export interface Exposure {
+  net: number;
+  gross: number;
+  long: number;
+  short: number;
+  by_coin: Record<string, number>;
 }
 
-export interface TaxEstimate {
-  federal: number;
-  niit: number;
-  state: number;
-  total: number;
-  effective_rate: number;
-  marginal_federal: number;
-  state_rate: number;
-  short_term: number;
-  long_term: number;
-  loss_carryforward: number;
-}
-
-export interface Bot {
-  id: BotId;
-  name: string;
-  label: string;
-  color: string;
-  kind: "rules" | "oracle" | "hodl";
-  generation: string;
-  benchmark: boolean;
-  tagline: string;
+export interface Account {
   equity: number;
+  deposits: number;
   cash: number;
-  start: number;
-  total_return: number;
-  status: string;
-  halted: boolean;
-  paused: boolean;
-  open: number;
-  exposure: number;
-  throttle: number;
-  benched: string[];
-  rank: number;
-  today: {
-    pnl: number;
-    pnl_pct: number;
-    realized: number;
-    fees: number;
-    trades: number;
-    wins: number;
-    losses: number;
-    tax: number;
-    after_tax: number;
-    start_equity: number;
-    limit_used: number;
+  pnl_today: number;
+  pnl_mtd: number;
+  ret_mtd: number;
+  pnl_all: number;
+  ret_all: number;
+  month: string;
+  days_left: number;
+  exposure: Exposure;
+  fees: { spot: number; perp: number };
+  funding: number;
+  netting_saved: number;
+  margin: number;
+  tax_ytd: {
+    total: number;
+    federal: number;
+    state: number;
+    niit: number;
+    short_term: number;
+    long_term: number;
+    section_1256: number;
+    spot_short_term: number;
+    spot_long_term: number;
   };
-  all: {
-    trades: number;
-    wins: number;
-    losses: number;
-    win_rate: number | null;
-    profit_factor: number | null;
-    fees: number;
-    realized: number;
-    best: number;
-    worst: number;
-    max_dd: number;
-    volume: number;
-    slippage: number;
-    streak: number;
-  };
-  tax: TaxEstimate;
-  profile: {
-    risk_per_trade: number;
-    daily_loss_limit: number;
-    max_open: number;
-    symbols: string[];
-    signal_tf: string;
-    trend_tf: string;
-    entry_order: string;
-    min_net_rr: number;
-    min_confidence: number;
-    strategies: string[];
-  };
+  fee_tier: string;
+  costs: { long_venue: string; carry_on: boolean };
+}
+
+export interface Agent {
+  id: AgentId;
+  color: string;
+  role: string;
+  about: string;
+  weight: number;
+  capital: number;
+  mode: string;
+  detail: [string, number][];
+  invested: number;
+  pnl_today: number;
+  pnl_mtd: number;
+  pnl_all: number;
+  fees: number;
+  funding: number;
+  targets: { key: string; weight: number }[];
 }
 
 export interface Position {
-  id: string;
-  bot: BotId;
-  symbol: string;
-  strategy: string;
-  status: "opening" | "open" | "closing";
+  key: string;
+  instrument: string;
+  product?: string;
+  venue: "spot" | "perp";
+  side: "long" | "short";
   qty: number;
-  entry: number;
-  price: number;
-  stop: number;
-  initial_stop: number;
-  target: number | null;
-  hard_stop: number | null;
-  expires: number | null;
-  partial: number | null;
-  partial_done: boolean;
-  opened: number;
-  pnl: number;
-  pnl_pct: number;
-  r: number;
-  confidence: number;
-  headline: string;
-  reasons: string[];
-  trailing: boolean;
-  be: boolean;
+  contracts?: number;
+  avg: number;
+  mark: number;
   value: number;
-  timeline: { ts: number; kind: string; title: string }[];
+  pnl: number;
+  funding?: number;
+  weight: number;
+  owners: Record<string, number>;
 }
 
-export interface Trade {
+export interface OracleTrade {
   id: string;
-  bot: BotId;
   symbol: string;
-  strategy: string;
-  opened: number;
-  closed: number;
-  qty: number;
+  side: "long" | "short";
   entry: number;
-  exit: number;
-  gross: number;
-  fees: number;
-  net: number;
-  r: number;
-  ret_pct: number;
-  reason: string;
-  reason_label: string;
-  confidence: number;
-  headline: string;
-  tax: number;
-  after_tax: number;
-  term: string;
   stop: number;
   target: number;
-}
-
-export interface BotEvent {
-  id: string;
-  ts: number;
-  bot: BotId;
-  kind: "thought" | "setup" | "pass" | "order" | "fill" | "open" | "stop" | "partial" | "close" | "risk" | "system";
-  title: string;
-  text: string;
-  symbol: string | null;
-  level: "info" | "good" | "bad" | "warn" | "action";
-  data: Record<string, unknown>;
-}
-
-export interface Fees {
-  mode: string;
-  tier: string;
-  maker: number;
-  taker: number;
-  volume30d: number;
-  tiers?: { name: string; min: number; maker: number; taker: number }[];
-}
-
-export interface MarketStatus {
-  source: string;
-  connected: boolean;
-  message: string;
+  opened: number;
+  expires: number;
+  forecast: number;
+  thr: number;
+  reasons: string[];
+  exit?: number;
+  closed?: number;
+  ret?: number;
+  R?: number;
+  why?: string;
 }
 
 export interface Live {
   ts: number;
-  prices: Price[];
-  bots: Bot[];
+  account: Account;
+  agents: Agent[];
   positions: Position[];
-  market: MarketStatus;
-  fees: Fees;
-  regimes: Record<string, Record<string, string>>;
-  oracle: OracleState | null;
+  oracle: { open: OracleTrade[]; closed: OracleTrade[]; wins: number; trades: number };
+  regime: { btc_on: boolean | null; btc_close?: number; btc_sma200?: number; fear_greed?: number | null; day?: number };
+  nova: { picks: Record<string, number>; sharpe: Record<string, number>; labels: Record<string, string> };
+  quotes: { s: string; p: number; chg: number }[];
+  market: { source: string; connected: boolean };
+  engine: { forecaster: string; ready: boolean; desk_ready: boolean };
 }
 
-export interface OraclePrediction {
+export interface Event {
+  id: string;
+  ts: number;
+  kind: string;
+  agent: string;
+  title: string;
+  text: string;
+  level: "info" | "good" | "bad" | "warn";
+  symbol: string | null;
+  data: Record<string, unknown>;
+}
+
+export interface Fill {
+  ts: number;
+  venue: string;
   symbol: string;
-  pred: number;
-  thr: number;
-  regime: boolean;
-  dvol: number;
-  rank: number;
-  reasons: string[];
+  instrument: string;
+  side: string;
+  qty: number;
+  contracts: number | null;
+  price: number;
+  fee: number;
+  realized: number;
+  reason?: string;
 }
 
-export interface OracleTrack {
-  generated: string;
-  method: string;
-  model: { type: string; features: number; coins: number; history: string; auc_unfiltered: number };
-  dev: TrackPeriod;
-  holdout: TrackPeriod;
-  caveat: string;
-}
-
-export interface TrackPeriod {
-  period: string;
-  return_pct: number;
-  max_dd_pct: number;
-  trades: number;
-  win_rate: number;
-  avg_r: number;
-  hodl_return_pct: number;
-  hodl_max_dd_pct: number;
+export interface History {
+  equity: [number, number][];
+  btc: [number, number][];
+  agents: Record<string, [number, number][]>;
+  day_pnl: Record<string, number>;
+  months: Record<string, { pnl: number; ret: number }>;
 }
 
 export interface OracleState {
   state: string;
   status: string;
   ready: boolean;
-  model: { trained_at: number; samples: number; features: number; cutoff: number; train_seconds?: number; hours?: number } | null;
   bar_t: number | null;
-  threshold: number | null;
-  regime: boolean | null;
-  predictions: OraclePrediction[];
-  track_record: OracleTrack | null;
+  thr_long: number | null;
+  thr_short: number | null;
+  trained_at: number | null;
+  model: { train_seconds?: number; samples?: number; features?: number; hours?: number };
+  forecasts: { symbol: string; long: number | null; short: number | null; dvol: number; reasons: string[] }[];
 }
 
-export interface TaxSettings {
-  filing_status: "single" | "mfj";
-  other_income: number;
-  state: string;
-  state_name: string;
-  state_rate: number;
-  state_rate_override: number | null;
+export interface NewsItem {
+  id: string;
+  title: string;
+  link: string;
+  ts: number;
+  source: string;
+  score: number;
+  severe: boolean;
+  coins: string[];
+}
+
+export interface News {
+  status: string;
+  mood_24h: number | null;
+  vetoes: Record<string, number>;
+  headline_risk_until: number | null;
+  items: NewsItem[];
 }
 
 export interface Meta {
-  mode: string;
-  started: number;
-  starting_balance: number;
+  agents: Record<string, { color: string; role: string; about: string }>;
   symbols: string[];
-  market: MarketStatus;
-  fees: Fees;
-  tax: TaxSettings;
+  started: number;
+  deposits: number;
+  account: string;
+  tax: { filing_status: string; other_income: number; state: string; state_name: string; state_rate: number };
   states: { code: string; name: string; rate: number }[];
-  timeframes: Record<string, string>;
 }
 
 export interface Candle {
