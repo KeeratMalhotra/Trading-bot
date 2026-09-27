@@ -6,6 +6,7 @@ import { Agents } from "./components/Agents";
 import { PerformanceChart } from "./components/PerformanceChart";
 import { PriceChart } from "./components/PriceChart";
 import { BacktestChart } from "./components/BacktestChart";
+import { Toasts, WeeklyOverlay } from "./components/Toasts";
 import { Positions } from "./components/Positions";
 import { Log } from "./components/Log";
 import { Side } from "./components/Side";
@@ -118,6 +119,8 @@ function ChartCard() {
         <div className={clsx("absolute inset-0", view !== "backtest" && "invisible")}>
           <BacktestChart />
         </div>
+        <Toasts />
+        <WeeklyOverlay />
       </div>
     </section>
   );

@@ -112,6 +112,35 @@ Prices are always live Coinbase prices. If Coinbase can't be reached at startup,
 - **Account:** net liquidation value, month-to-date and today's P&L, since-inception return, and margin in use.
 - **What if (60% QUORUM + 40% BTC):** what the same starting amount would be worth with 40% held in BTC instead, shown as a box with a mini chart and as a gold line on the performance chart. It's display only and never affects trading. Set the split with `MIX_BTC_SHARE`, and `MIX_REBALANCE` for rebalancing.
 - **Backtest tab:** $100k from Jan 2017 in BTC alone vs the same QUORUM + BTC split, on a log scale, with how each did during BTC's two big crashes. It's clearly labelled as a hypothetical backtest. For OBS, `http://localhost:8000/?view=backtest` opens straight on this tab.
+
+### Stream features (display only: none of this changes trading)
+
+- **Agents that talk:** each agent card on the Desk ends with its latest line, in character, built only from real numbers:
+  - **ATLAS**, the calm veteran: "Day 12 of the trend. Holding BTC. Wake me when it breaks."
+  - **ORACLE**, the data scientist: "Target hit on SOL. +1.8R, +5.2%. The model sends its regards."
+  - **NOVA**, the copycat: "Borrowing ORACLE's SUI short. Why reinvent the wheel?"
+
+  Lines update on every decision, trade and weekly result, and at least every 3 hours otherwise.
+- **Team jerseys:** a weekly race between the agents, by return on the capital each had when the week started. It shows each agent's rank (#1 in gold), weeks won this season (trophy count), and the full table in the side panel's **Weekly** tab. To show the fans' split, run a poll on Twitch or YouTube and enter the result:
+  `curl -X POST localhost:8000/api/jerseys -H 'content-type: application/json' -H "x-admin-token: $ADMIN_TOKEN" -d '{"ATLAS":45,"ORACLE":35,"NOVA":20}'`
+- **Weekly earnings call:** when a week closes (Sunday midnight, New York time), a report takes over the chart for two minutes. It covers:
+  - each agent's grade (A ≥ +2% · B ≥ +0.5% · C ±0.5% · D ≥ −2% · F) with its own comment;
+  - the winner, and account vs BTC;
+  - the best and worst trade, and trades closed;
+  - desk moves, the season table, and how the fans' picks did.
+
+  Past reports stay in the **Weekly** tab.
+- **Trade cards:** every closed trade slides in over the chart's lower-left corner. That's each ORACLE trade (target, stop or 14-day end, with R), and each ATLAS/NOVA position from open to full close: entry → exit, P&L, return and time held. At most two show at once; the rest queue.
+- **Milestones:**
+  - new all-time highs (each at least 3% above the last one announced);
+  - up 5/10/25/50/100%… since the start;
+  - 5, 7, 10… green days in a row;
+  - the 1st, 10th, 25th, 100th… trade closed;
+  - 1/7/30/100/365 days on air.
+
+  An account that was already running doesn't get a burst of old ones.
+
+Trade cards, milestones and weekly calls also appear in the Activity log, and everything is saved with the account.
 - **Desk:** each agent's current activity, allocation, capital, % invested, and P&L today, this month and since start. Click an agent to filter the activity log.
 - **Performance:** account vs BTC buy & hold. **Market:** candles with the team's fills, average prices and ORACLE's stops and targets.
 - **Positions:** spot and futures, contracts, average price, mark, unrealized P&L and funding, each position's exit plan, and which agents hold it.

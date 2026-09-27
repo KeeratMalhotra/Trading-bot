@@ -1,16 +1,19 @@
 import clsx from "clsx";
 import { useState } from "react";
-import { useStore } from "../store";
+import { Trophy } from "lucide-react";
+import { AGENT_COLOR, useStore } from "../store";
 import { ago, left, pct, price, tone, usd } from "../lib/format";
+import { WeeklyCard } from "./Toasts";
 
-/** Right column: monthly calendar, ORACLE forecasts, news, costs & tax. */
+/** Right column: monthly calendar, weekly race, ORACLE forecasts, news, costs & tax. */
 export function Side() {
-  const [tab, setTab] = useState<"calendar" | "forecasts" | "news" | "costs">("calendar");
+  const [tab, setTab] = useState<"calendar" | "weekly" | "forecasts" | "news" | "costs">("calendar");
   const tabs = [
     ["calendar", "Calendar"],
+    ["weekly", "Weekly"],
     ["forecasts", "Forecasts"],
     ["news", "News"],
-    ["costs", "Costs & tax"],
+    ["costs", "Costs"],
   ] as const;
   return (
     <section className="card flex flex-col min-h-0 h-full">
@@ -27,11 +30,71 @@ export function Side() {
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto scroll">
         {tab === "calendar" && <Calendar />}
+        {tab === "weekly" && <Weekly />}
         {tab === "forecasts" && <Forecasts />}
         {tab === "news" && <NewsList />}
         {tab === "costs" && <Costs />}
       </div>
     </section>
+  );
+}
+
+/** Team jerseys: this week's race, the season table, and the latest weekly earnings calls. */
+function Weekly() {
+  const live = useStore((s) => s.live);
+  const show = live?.show;
+  if (!live || !show) return null;
+  const race = [...live.agents].sort((a, b) => (a.week?.rank ?? 9) - (b.week?.rank ?? 9));
+  const fans = show.week?.fans;
+  return (
+    <div className="p-3 space-y-4">
+      <div>
+        <div className="flex items-baseline justify-between mb-1.5">
+          <span className="label">This week{show.week ? ` · ${show.week.label}` : ""}</span>
+          <span className="text-[10.5px] text-mute">return on each agent's capital</span>
+        </div>
+        <table className="tbl">
+          <tbody>
+            {race.map((a) => (
+              <tr key={a.id}>
+                <td className="!px-1 w-6 num text-mute">#{a.week?.rank ?? "—"}</td>
+                <td className="!px-1">
+                  <span className="font-semibold tracking-wide text-[12px]" style={{ color: a.color }}>
+                    {a.id}
+                  </span>
+                </td>
+                <td className={clsx("!px-1 text-right num", tone(a.week?.ret ?? 0))}>{a.week ? pct(a.week.ret, 2) : "—"}</td>
+                <td className={clsx("!px-1 text-right num", tone(a.week?.pnl ?? 0))}>{a.week ? usd(a.week.pnl, { sign: true, whole: true }) : ""}</td>
+                <td className="!px-1 text-right num text-mute w-12">{fans ? `${Math.round((fans[a.id] ?? 0) * 100)}%` : ""}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {fans && <div className="text-[10.5px] text-mute mt-1 text-right">fans' picks this week</div>}
+      </div>
+      <div>
+        <div className="label mb-1.5">Season · weeks won</div>
+        <div className="grid grid-cols-3 gap-2">
+          {live.agents.map((a) => (
+            <div key={a.id} className="rounded-md border border-line px-2.5 py-2 flex items-center gap-2">
+              <Trophy size={12} className={show.wins[a.id] ? "text-[#e3b35b]" : "text-mute"} />
+              <span className="font-semibold text-[11.5px]" style={{ color: AGENT_COLOR[a.id] }}>
+                {a.id}
+              </span>
+              <span className="ml-auto num text-hi">{show.wins[a.id] ?? 0}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="space-y-2">
+        <div className="label">Weekly earnings calls</div>
+        {show.reports.length ? (
+          show.reports.map((r) => <WeeklyCard key={r.id} r={r} compact />)
+        ) : (
+          <div className="text-[11.5px] text-mute">The first one is published when this week closes (Sunday midnight, New York time).</div>
+        )}
+      </div>
+    </div>
   );
 }
 

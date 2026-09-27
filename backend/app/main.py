@@ -369,6 +369,16 @@ def settings(body: SettingsIn, x_admin_token: str | None = Header(None)):
     return t.to_json()
 
 
+@app.post("/api/jerseys")
+def jerseys(body: dict[str, float], x_admin_token: str | None = Header(None)):
+    """This week's fan split for the team jerseys, e.g. from a Twitch/YouTube poll: {"ATLAS": 45, "ORACLE": 35, "NOVA": 20}."""
+    require_admin(x_admin_token)
+    fans = S.q.show.set_fans(body)
+    if fans is None:
+        raise HTTPException(409, "the week hasn't started yet")
+    return {"week": S.q.show.week["id"], "fans": fans}
+
+
 @app.get("/api/auth")
 def auth(x_admin_token: str | None = Header(None)):
     return {"required": bool(ADMIN_TOKEN), "ok": not ADMIN_TOKEN or x_admin_token == ADMIN_TOKEN}
